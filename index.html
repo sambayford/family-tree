@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<title>Family Tree</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bark:#20261f;
+    --bark-2:#2a3228;
+    --paper:#f5efe2;
+    --paper-2:#eee5d0;
+    --ink:#232019;
+    --gold:#c99a3e;
+    --gold-soft:#e3c887;
+    --rose:#b5566f;
+    --slate:#4f6f8f;
+    --neutral:#8a8272;
+    --line:#8a7a4f;
+    --shadow: 0 6px 18px rgba(0,0,0,0.28);
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%; overflow:hidden;
+    background:var(--bark);
+    font-family:'Inter',sans-serif;
+    color:var(--ink);
+    -webkit-tap-highlight-color: transparent;
+  }
+  body{
+    background-image:
+      radial-gradient(ellipse at 20% 10%, rgba(255,255,255,0.03), transparent 50%),
+      radial-gradient(ellipse at 80% 90%, rgba(255,255,255,0.03), transparent 50%);
+  }
+
+  /* ---------- Top bar ---------- */
+  #topbar{
+    position:fixed; top:0; left:0; right:0; height:58px; z-index:50;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 14px;
+    background:linear-gradient(180deg, rgba(32,38,31,0.96), rgba(32,38,31,0.88));
+    border-bottom:1px solid rgba(201,154,62,0.25);
+    backdrop-filter: blur(6px);
+  }
+  #brand{
+    display:flex; align-items:baseline; gap:8px;
+  }
+  #brand .mark{
+    font-family:'Fraunces', serif; font-size:22px; font-weight:600; color:var(--gold-soft);
+    letter-spacing:0.3px;
+  }
+  #brand .sub{
+    font-size:11px; color:#9aa596; letter-spacing:1.5px; text-transform:uppercase;
+  }
+  .topbtns{ display:flex; gap:6px; align-items:center; }
+  .iconbtn{
+    width:38px; height:38px; border-radius:10px; border:1px solid rgba(201,154,62,0.3);
+    background:rgba(255,255,255,0.04); color:var(--gold-soft);
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    font-size:16px; transition: background .15s, transform .1s;
+  }
+  .iconbtn:active{ transform:scale(0.94); }
+  .iconbtn:hover{ background:rgba(201,154,62,0.18); }
+
+  /* ---------- Canvas ---------- */
+  #viewport{
+    position:absolute; top:58px; left:0; right:0; bottom:0;
+    overflow:hidden; cursor:grab;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 34px 34px;
+  }
+  #viewport.dragging{ cursor:grabbing; }
+  #world{
+    position:absolute; top:0; left:0; transform-origin: 0 0;
+  }
+  svg#lines{ position:absolute; top:0; left:0; overflow:visible; pointer-events:none; }
+  .branch{ fill:none; stroke:var(--line); stroke-width:2.5; opacity:0.75; }
+  .spouseline{ stroke:var(--gold); stroke-width:3; opacity:0.85; }
+
+  /* ---------- Node card ---------- */
+  .node{
+    position:absolute; width:150px;
+    background:linear-gradient(180deg, var(--paper), var(--paper-2));
+    border-radius:14px; box-shadow:var(--shadow);
+    border:2px solid transparent;
+    padding:10px 10px 12px;
+    text-align:center; cursor:pointer;
+    transition: transform .12s ease, box-shadow .12s ease;
+    user-select:none;
+  }
+  .node:active{ transform: scale(0.97); }
+  .node.sex-F{ border-color: var(--rose); }
+  .node.sex-M{ border-color: var(--slate); }
+  .node.sex-O{ border-color: var(--neutral); }
+  .node.highlighted{ box-shadow: 0 0 0 4px var(--gold), var(--shadow); }
+  .node .photowrap{
+    width:64px; height:64px; border-radius:50%; margin:0 auto 8px;
+    overflow:hidden; background:#d8cdb0;
+    display:flex; align-items:center; justify-content:center;
+    border:2px solid rgba(0,0,0,0.08);
+  }
+  .node .photowrap img{ width:100%; height:100%; object-fit:cover; }
+  .node .initial{ font-family:'Fraunces',serif; font-size:24px; color:#a0916b; }
+  .node .name{
+    font-family:'Fraunces', serif; font-weight:600; font-size:15px; line-height:1.2;
+    color:var(--ink); margin-bottom:3px; word-break:break-word;
+  }
+  .node .dates{ font-size:10.5px; color:#6b6252; letter-spacing:0.2px; }
+  .node .me-tag{
+    position:absolute; top:-9px; left:50%; transform:translateX(-50%);
+    background:var(--gold); color:#2a2410; font-size:9px; font-weight:700;
+    padding:2px 8px; border-radius:8px; letter-spacing:0.6px; text-transform:uppercase;
+  }
+
+  /* ---------- Zoom controls ---------- */
+  #zoomctl{
+    position:fixed; right:14px; bottom:20px; z-index:40;
+    display:flex; flex-direction:column; gap:6px;
+  }
+
+  /* ---------- Bottom sheet / modal ---------- */
+  .overlay{
+    position:fixed; inset:0; background:rgba(15,17,12,0.55);
+    z-index:100; display:none; align-items:flex-end; justify-content:center;
+  }
+  .overlay.show{ display:flex; }
+  @media (min-width:640px){
+    .overlay{ align-items:center; }
+  }
+  .sheet{
+    background:var(--paper); width:100%; max-width:440px;
+    border-radius:20px 20px 0 0; padding:20px 20px calc(20px + env(safe-area-inset-bottom));
+    max-height:88vh; overflow-y:auto;
+    box-shadow: 0 -10px 30px rgba(0,0,0,0.4);
+  }
+  @media (min-width:640px){
+    .sheet{ border-radius:18px; margin-bottom:0; }
+  }
+  .sheet h2{
+    font-family:'Fraunces',serif; font-size:20px; margin:0 0 14px; color:var(--ink);
+  }
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:12px; font-weight:600; color:#5a5344; margin-bottom:5px; text-transform:uppercase; letter-spacing:0.4px;}
+  .field input[type=text], .field input[type=date], .field select{
+    width:100%; padding:10px 12px; border-radius:10px; border:1.5px solid #d9cca5;
+    background:#fffdf7; font-size:15px; font-family:'Inter',sans-serif; color:var(--ink);
+  }
+  .field input:focus, .field select:focus{ outline:2px solid var(--gold); }
+  .sexrow{ display:flex; gap:8px; }
+  .sexbtn{
+    flex:1; padding:10px; border-radius:10px; border:1.5px solid #d9cca5; background:#fffdf7;
+    font-size:14px; cursor:pointer; font-weight:600; color:#6b6252;
+  }
+  .sexbtn.active[data-sex=F]{ background:var(--rose); border-color:var(--rose); color:#fff; }
+  .sexbtn.active[data-sex=M]{ background:var(--slate); border-color:var(--slate); color:#fff; }
+  .sexbtn.active[data-sex=O]{ background:var(--neutral); border-color:var(--neutral); color:#fff; }
+  .photoRow{ display:flex; align-items:center; gap:12px; }
+  .photoPreview{
+    width:56px; height:56px; border-radius:50%; background:#e4d9bb; overflow:hidden; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; color:#a0916b; font-size:11px;
+  }
+  .photoPreview img{ width:100%; height:100%; object-fit:cover; }
+  .filebtn{
+    padding:9px 14px; border-radius:9px; border:1.5px solid #d9cca5; background:#fffdf7;
+    font-size:13px; font-weight:600; cursor:pointer; color:var(--ink);
+  }
+  .btnrow{ display:flex; gap:10px; margin-top:18px; }
+  .btn{
+    flex:1; padding:13px; border-radius:12px; border:none; font-size:15px; font-weight:600;
+    cursor:pointer; font-family:'Inter',sans-serif;
+  }
+  .btn.primary{ background:var(--gold); color:#2a2410; }
+  .btn.secondary{ background:#e9ddc0; color:#5a5344; }
+  .btn.danger{ background:transparent; color:#b5566f; border:1.5px solid #b5566f; }
+  .btn:active{ transform:scale(0.98); }
+
+  /* action sheet list */
+  .actionlist{ display:flex; flex-direction:column; gap:8px; }
+  .actionitem{
+    display:flex; align-items:center; gap:12px; padding:13px 14px; border-radius:12px;
+    background:#fffdf7; border:1.5px solid #e6dab6; cursor:pointer; font-size:15px; font-weight:600;
+    color:var(--ink); text-align:left;
+  }
+  .actionitem:active{ background:#f2e6c4; }
+  .actionitem .emoji{ font-size:18px; width:22px; text-align:center; }
+  .actionitem.remove{ color:var(--rose); }
+
+  /* empty-state hint */
+  #hint{
+    position:fixed; left:50%; bottom:22px; transform:translateX(-50%); z-index:30;
+    background:rgba(32,38,31,0.85); color:var(--paper); padding:9px 16px; border-radius:20px;
+    font-size:12.5px; letter-spacing:0.2px; pointer-events:none; opacity:0; transition:opacity .3s;
+    max-width:88vw; text-align:center;
+  }
+  #hint.show{ opacity:1; }
+
+  .toast{
+    position:fixed; top:70px; left:50%; transform:translateX(-50%); z-index:200;
+    background:#2a2410; color:var(--gold-soft); padding:10px 18px; border-radius:20px;
+    font-size:13px; font-weight:600; opacity:0; pointer-events:none; transition:opacity .25s, top .25s;
+    box-shadow: var(--shadow);
+  }
+  .toast.show{ opacity:1; top:70px; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div id="brand">
+    <span class="mark">🌳 Family Tree</span>
+  </div>
+  <div class="topbtns">
+    <button class="iconbtn" id="btnSearch" title="Find person">🔍</button>
+    <button class="iconbtn" id="btnBackup" title="Backup">⇩</button>
+    <button class="iconbtn" id="btnRestore" title="Restore">⇧</button>
+    <button class="iconbtn" id="btnAbout" title="About">ℹ️</button>
+    <input type="file" id="restoreFile" accept="application/json" style="display:none">
+  </div>
+</div>
+
+<div id="viewport">
+  <div id="world">
+    <svg id="lines"></svg>
+  </div>
+</div>
+
+<div id="zoomctl">
+  <button class="iconbtn" id="btnZoomIn">+</button>
+  <button class="iconbtn" id="btnZoomOut">–</button>
+  <button class="iconbtn" id="btnZoomReset">⤾</button>
+</div>
+
+<div id="hint"></div>
+<div class="toast" id="toast"></div>
+
+<!-- Action sheet: tap a node -->
+<div class="overlay" id="actionOverlay">
+  <div class="sheet">
+    <h2 id="actionTitle">Person</h2>
+    <div class="actionlist" id="actionList"></div>
+    <div class="btnrow">
+      <button class="btn secondary" id="actionCancel">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit / create person form -->
+<div class="overlay" id="formOverlay">
+  <div class="sheet">
+    <h2 id="formTitle">Add person</h2>
+    <div class="field" id="marriageDateField" style="display:none;">
+      <label>Marriage date</label>
+      <input type="date" id="fMarriageDate">
+    </div>
+    <div class="field">
+      <label>Name</label>
+      <input type="text" id="fName" placeholder="Full name">
+    </div>
+    <div class="field">
+      <label>Sex</label>
+      <div class="sexrow">
+        <button type="button" class="sexbtn" data-sex="F">Female</button>
+        <button type="button" class="sexbtn" data-sex="M">Male</button>
+        <button type="button" class="sexbtn" data-sex="O">Other</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Photo</label>
+      <div class="photoRow">
+        <div class="photoPreview" id="fPhotoPreview">None</div>
+        <button type="button" class="filebtn" id="fPhotoBtn">Choose photo</button>
+        <input type="file" id="fPhotoFile" accept="image/*" style="display:none">
+      </div>
+    </div>
+    <div class="field">
+      <label>Born</label>
+      <input type="date" id="fBirth">
+    </div>
+    <div class="field">
+      <label>Died</label>
+      <input type="date" id="fDeath">
+    </div>
+    <div class="btnrow">
+      <button class="btn secondary" id="formCancel">Cancel</button>
+      <button class="btn primary" id="formSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Choose spouse when adding a child -->
+<div class="overlay" id="spouseChoiceOverlay">
+  <div class="sheet">
+    <h2>Who's the other parent?</h2>
+    <div class="actionlist" id="spouseChoiceList"></div>
+    <div class="btnrow">
+      <button class="btn secondary" id="spouseChoiceCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- About -->
+<div class="overlay" id="aboutOverlay">
+  <div class="sheet">
+    <h2>About this tree</h2>
+    <p style="font-size:14px; line-height:1.55; color:#5a5344;">
+      Tap "Me" to begin — add parents, a spouse, or children from any person.
+      Tap a person's connections to keep branching the tree outward. Everything
+      is saved on this device only (no account, no sync) — use the backup
+      button to export a copy.
+    </p>
+    <p style="font-size:12px; color:#9a9482; margin-top:14px;">v1.0</p>
+    <div class="btnrow">
+      <button class="btn primary" id="aboutClose">Got it</button>
+    </div>
+  </div>
+</div>
+
+<!-- Search -->
+<div class="overlay" id="searchOverlay">
+  <div class="sheet">
+    <h2>Find someone</h2>
+    <div class="field">
+      <input type="text" id="searchInput" placeholder="Type a name…">
+    </div>
+    <div class="actionlist" id="searchResults"></div>
+    <div class="btnrow">
+      <button class="btn secondary" id="searchCancel">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var STORAGE_KEY = 'family-tree-data-v1';
+  var NODE_W = 150, NODE_H = 108, SLOT_W = 176, ROW_H = 168;
+
+  /* ---------------- State ---------------- */
+  var state = { nodes: {} };
+  var scale = 1, panX = 40, panY = 40;
+
+  function uid(){ return 'p' + Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4); }
+
+  function load(){
+    try{
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if(raw){ state = JSON.parse(raw); return; }
+    }catch(e){ console.warn('load failed', e); }
+    // first run: create "me"
+    var me = { id: uid(), name:'Me', sex:'O', photo:null, birth:'', death:'', parentIds:[], spouseIds:[], isMe:true };
+    state = { nodes: {} };
+    state.nodes[me.id] = me;
+    save();
+  }
+
+  var saveTimer = null;
+  function save(){
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function(){
+      try{
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      }catch(e){
+        showToast("Storage full — try smaller/fewer photos");
+        console.warn('save failed', e);
+      }
+    }, 150);
+  }
+
+  function showToast(msg){
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function(){ t.classList.remove('show'); }, 2200);
+  }
+
+  /* ---------------- Relationship helpers ---------------- */
+  function getNode(id){ return state.nodes[id]; }
+  function allNodes(){ return Object.keys(state.nodes).map(function(id){ return state.nodes[id]; }); }
+
+  function areSpouses(a,b){
+    var na = getNode(a);
+    return na && na.spouseIds && na.spouseIds.indexOf(b) !== -1;
+  }
+  function linkSpouses(aId,bId,date){
+    var a = getNode(aId), b = getNode(bId);
+    if(!a || !b) return;
+    if(a.spouseIds.indexOf(bId)===-1) a.spouseIds.push(bId);
+    if(b.spouseIds.indexOf(aId)===-1) b.spouseIds.push(aId);
+    if(date){ a.marriageDate = date; b.marriageDate = date; }
+  }
+  function unlinkNodeReferences(id){
+    allNodes().forEach(function(n){
+      if(n.parentIds) n.parentIds = n.parentIds.filter(function(p){ return p!==id; });
+      if(n.spouseIds) n.spouseIds = n.spouseIds.filter(function(s){ return s!==id; });
+    });
+  }
+  function childrenOf(id){
+    return allNodes().filter(function(n){ return n.parentIds && n.parentIds.indexOf(id) !== -1; });
+  }
+
+  /* ---------------- Union-Find for spouse units ---------------- */
+  function computeUnits(){
+    var parent = {};
+    allNodes().forEach(function(n){ parent[n.id] = n.id; });
+    function find(x){ while(parent[x]!==x){ x = parent[x]; } return x; }
+    function union(a,b){ var ra=find(a), rb=find(b); if(ra!==rb) parent[ra]=rb; }
+    allNodes().forEach(function(n){
+      (n.spouseIds||[]).forEach(function(s){ if(state.nodes[s]) union(n.id, s); });
+    });
+    var groups = {};
+    allNodes().forEach(function(n){
+      var r = find(n.id);
+      if(!groups[r]) groups[r] = [];
+      groups[r].push(n.id);
+    });
+    var unitOfNode = {};
+    var units = [];
+    Object.keys(groups).forEach(function(r){
+      var members = groups[r].sort(function(x,y){
+        // keep a stable, sex-ish order: M then F then O, else creation order
+        var order = {M:0,F:1,O:2};
+        var nx=getNode(x), ny=getNode(y);
+        return (order[nx.sex]||2) - (order[ny.sex]||2);
+      });
+      var unitId = 'u_' + r;
+      units.push({ id: unitId, members: members });
+      members.forEach(function(m){ unitOfNode[m] = unitId; });
+    });
+    return { units: units, unitOfNode: unitOfNode };
+  }
+
+  /* ---------------- Layout (generation BFS + barycenter ordering) ---------------- */
+  function computeLayout(){
+    var nodes = allNodes();
+    if(nodes.length===0) return { positions:{}, edges:[], spouseEdges:[], width:0, height:0 };
+
+    var uinfo = computeUnits();
+    var units = uinfo.units, unitOfNode = uinfo.unitOfNode;
+
+    // generation via BFS across parent/child/spouse edges
+    var gen = {};
+    var rootNode = nodes.filter(function(n){return n.isMe;})[0] || nodes[0];
+    gen[rootNode.id] = 0;
+    var queue = [rootNode.id];
+    while(queue.length){
+      var cur = queue.shift();
+      var cn = getNode(cur);
+      var g = gen[cur];
+      (cn.parentIds||[]).forEach(function(p){
+        if(state.nodes[p] && !(p in gen)){ gen[p] = g-1; queue.push(p); }
+      });
+      (cn.spouseIds||[]).forEach(function(s){
+        if(state.nodes[s] && !(s in gen)){ gen[s] = g; queue.push(s); }
+      });
+      childrenOf(cur).forEach(function(ch){
+        if(!(ch.id in gen)){ gen[ch.id] = g+1; queue.push(ch.id); }
+      });
+    }
+    // any disconnected nodes: place at gen 0 appended
+    nodes.forEach(function(n){ if(!(n.id in gen)) gen[n.id] = 0; });
+
+    // unit generation = generation of its members (should match)
+    var unitGen = {};
+    units.forEach(function(u){ unitGen[u.id] = gen[u.members[0]]; });
+
+    // group units per layer
+    var minGen=0, maxGen=0;
+    units.forEach(function(u){ minGen=Math.min(minGen,unitGen[u.id]); maxGen=Math.max(maxGen,unitGen[u.id]); });
+    var layers = {};
+    units.forEach(function(u){ (layers[unitGen[u.id]] = layers[unitGen[u.id]]||[]).push(u); });
+
+    // initial order: by earliest-created member id string (stable-ish) — good enough default
+    Object.keys(layers).forEach(function(g){
+      layers[g].sort(function(a,b){ return a.members[0] < b.members[0] ? -1 : 1; });
+    });
+
+    function unitParentUnits(u){
+      var set = {};
+      u.members.forEach(function(mid){
+        (getNode(mid).parentIds||[]).forEach(function(p){
+          if(unitOfNode[p]) set[unitOfNode[p]] = true;
+        });
+      });
+      return Object.keys(set);
+    }
+    function unitChildUnits(u){
+      var set = {};
+      u.members.forEach(function(mid){
+        childrenOf(mid).forEach(function(ch){ set[unitOfNode[ch.id]] = true; });
+      });
+      return Object.keys(set);
+    }
+
+    var unitIndex = {}; // id -> {gen, orderIndex}
+    function reindex(){
+      Object.keys(layers).forEach(function(g){
+        layers[g].forEach(function(u,i){ unitIndex[u.id] = { gen: parseInt(g,10), idx: i }; });
+      });
+    }
+    reindex();
+
+    function avgIdx(ids){
+      if(!ids.length) return null;
+      var sum=0, n=0;
+      ids.forEach(function(id){ if(unitIndex[id]){ sum+=unitIndex[id].idx; n++; } });
+      return n? sum/n : null;
+    }
+
+    for(var pass=0; pass<4; pass++){
+      var gens = Object.keys(layers).map(Number).sort(function(a,b){return a-b;});
+      // top-down using parents
+      gens.forEach(function(g){
+        layers[g].forEach(function(u){ u._key = avgIdx(unitParentUnits(u)); });
+        layers[g].sort(function(a,b){
+          if(a._key===null && b._key===null) return 0;
+          if(a._key===null) return 1;
+          if(b._key===null) return -1;
+          return a._key - b._key;
+        });
+      });
+      reindex();
+      // bottom-up using children
+      gens.slice().reverse().forEach(function(g){
+        layers[g].forEach(function(u){ u._key = avgIdx(unitChildUnits(u)); });
+        layers[g].sort(function(a,b){
+          if(a._key===null && b._key===null) return 0;
+          if(a._key===null) return 1;
+          if(b._key===null) return -1;
+          return a._key - b._key;
+        });
+      });
+      reindex();
+    }
+
+    // assign x slots
+    var positions = {};
+    var maxSlots = 0;
+    Object.keys(layers).forEach(function(g){
+      var cursor = 0;
+      layers[g].forEach(function(u){
+        u.members.forEach(function(mid, i){
+          positions[mid] = { slotX: cursor + i, gen: parseInt(g,10) };
+        });
+        cursor += u.members.length;
+      });
+      maxSlots = Math.max(maxSlots, cursor);
+    });
+
+    var minGenActual = Math.min.apply(null, Object.keys(layers).map(Number));
+    var pixelPositions = {};
+    Object.keys(positions).forEach(function(id){
+      var p = positions[id];
+      pixelPositions[id] = {
+        x: p.slotX * SLOT_W,
+        y: (p.gen - minGenActual) * ROW_H
+      };
+    });
+
+    // edges: parent-unit-midpoint -> child
+    var edges = [];
+    units.forEach(function(u){
+      var midX = 0;
+      u.members.forEach(function(m){ midX += pixelPositions[m].x; });
+      midX = midX / u.members.length + NODE_W/2;
+      var y = pixelPositions[u.members[0]].y + NODE_H;
+      var childIds = {};
+      u.members.forEach(function(mid){
+        childrenOf(mid).forEach(function(ch){ childIds[ch.id]=true; });
+      });
+      Object.keys(childIds).forEach(function(cid){
+        edges.push({ x1: midX, y1: y, x2: pixelPositions[cid].x + NODE_W/2, y2: pixelPositions[cid].y });
+      });
+    });
+
+    var spouseEdges = [];
+    units.forEach(function(u){
+      for(var i=0;i<u.members.length-1;i++){
+        var a = pixelPositions[u.members[i]], b = pixelPositions[u.members[i+1]];
+        spouseEdges.push({ x1: a.x+NODE_W, y1: a.y+NODE_H/2, x2: b.x, y2: b.y+NODE_H/2 });
+      }
+    });
+
+    var width = (maxSlots)*SLOT_W + 200;
+    var height = (Object.keys(layers).length)*ROW_H + 200;
+
+    return { positions: pixelPositions, edges: edges, spouseEdges: spouseEdges, width: width, height: height };
+  }
+
+  /* ---------------- Rendering ---------------- */
+  var world = document.getElementById('world');
+  var svg = document.getElementById('lines');
+  var viewport = document.getElementById('viewport');
+
+  function fmtYear(d){
+    if(!d) return '';
+    var y = d.split('-')[0];
+    return y;
+  }
+  function dateLabel(n){
+    var b = fmtYear(n.birth), d = fmtYear(n.death);
+    if(!b && !d) return '';
+    return b + (d ? ' – ' + d : (n.death===undefined? '' : ''));
+  }
+
+  function render(){
+    var layout = computeLayout();
+    // clear existing node elements
+    Array.prototype.slice.call(world.querySelectorAll('.node')).forEach(function(el){ el.remove(); });
+
+    svg.setAttribute('width', layout.width);
+    svg.setAttribute('height', layout.height);
+    svg.innerHTML = '';
+
+    layout.edges.forEach(function(e){
+      var midY = (e.y1 + e.y2)/2;
+      var path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      var d = 'M '+e.x1+' '+e.y1+' C '+e.x1+' '+midY+', '+e.x2+' '+midY+', '+e.x2+' '+e.y2;
+      path.setAttribute('d', d);
+      path.setAttribute('class','branch');
+      svg.appendChild(path);
+    });
+    layout.spouseEdges.forEach(function(e){
+      var line = document.createElementNS('http://www.w3.org/2000/svg','line');
+      line.setAttribute('x1', e.x1); line.setAttribute('y1', e.y1);
+      line.setAttribute('x2', e.x2); line.setAttribute('y2', e.y2);
+      line.setAttribute('class','spouseline');
+      svg.appendChild(line);
+    });
+
+    allNodes().forEach(function(n){
+      var pos = layout.positions[n.id];
+      if(!pos) return;
+      var el = document.createElement('div');
+      el.className = 'node sex-' + n.sex;
+      el.style.left = pos.x + 'px';
+      el.style.top = pos.y + 'px';
+      el.dataset.id = n.id;
+      var photoHtml = n.photo
+        ? '<img src="'+n.photo+'" alt="">'
+        : '<span class="initial">'+ (n.name? n.name.trim()[0].toUpperCase() : '?') +'</span>';
+      el.innerHTML =
+        (n.isMe ? '<span class="me-tag">Me</span>' : '') +
+        '<div class="photowrap">'+photoHtml+'</div>' +
+        '<div class="name">'+escapeHtml(n.name||'Unnamed')+'</div>' +
+        '<div class="dates">'+escapeHtml(dateLabel(n))+'</div>';
+      el.addEventListener('click', function(){ openActionSheet(n.id); });
+      world.appendChild(el);
+    });
+
+    applyTransform();
+  }
+
+  function escapeHtml(s){
+    return (s||'').replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function applyTransform(){
+    world.style.transform = 'translate('+panX+'px,'+panY+'px) scale('+scale+')';
+  }
+
+  /* ---------------- Pan & zoom ---------------- */
+  var isPanning=false, panStart={x:0,y:0}, panOrigin={x:0,y:0};
+  viewport.addEventListener('pointerdown', function(e){
+    if(e.target.closest('.node')) return;
+    isPanning = true;
+    viewport.classList.add('dragging');
+    panStart = { x:e.clientX, y:e.clientY };
+    panOrigin = { x:panX, y:panY };
+    viewport.setPointerCapture(e.pointerId);
+  });
+  viewport.addEventListener('pointermove', function(e){
+    if(!isPanning) return;
+    panX = panOrigin.x + (e.clientX - panStart.x);
+    panY = panOrigin.y + (e.clientY - panStart.y);
+    applyTransform();
+  });
+  ['pointerup','pointercancel'].forEach(function(ev){
+    viewport.addEventListener(ev, function(){ isPanning=false; viewport.classList.remove('dragging'); });
+  });
+  viewport.addEventListener('wheel', function(e){
+    e.preventDefault();
+    var delta = e.deltaY > 0 ? -0.08 : 0.08;
+    zoomBy(delta, e.clientX, e.clientY);
+  }, { passive:false });
+
+  function zoomBy(delta, cx, cy){
+    var newScale = Math.min(2.2, Math.max(0.35, scale + delta));
+    if(cx===undefined){ cx = viewport.clientWidth/2; cy = viewport.clientHeight/2; }
+    var rect = viewport.getBoundingClientRect();
+    var vx = cx - rect.left, vy = cy - rect.top;
+    var worldX = (vx - panX)/scale, worldY = (vy - panY)/scale;
+    scale = newScale;
+    panX = vx - worldX*scale;
+    panY = vy - worldY*scale;
+    applyTransform();
+  }
+  document.getElementById('btnZoomIn').addEventListener('click', function(){ zoomBy(0.15); });
+  document.getElementById('btnZoomOut').addEventListener('click', function(){ zoomBy(-0.15); });
+  document.getElementById('btnZoomReset').addEventListener('click', function(){
+    scale=1; centerOnMe();
+  });
+
+  function centerOnMe(){
+    var me = allNodes().filter(function(n){return n.isMe;})[0];
+    var layout = computeLayout();
+    if(me && layout.positions[me.id]){
+      var p = layout.positions[me.id];
+      panX = viewport.clientWidth/2 - (p.x+NODE_W/2)*scale;
+      panY = 100;
+    } else {
+      panX = 40; panY = 40;
+    }
+    applyTransform();
+  }
+
+  /* ---------------- Action sheet ---------------- */
+  var currentActionNode = null;
+  function openActionSheet(id){
+    currentActionNode = id;
+    var n = getNode(id);
+    document.getElementById('actionTitle').textContent = n.name || 'Unnamed';
+    var list = document.getElementById('actionList');
+    list.innerHTML = '';
+
+    function addItem(emoji, label, fn, cls){
+      var it = document.createElement('div');
+      it.className = 'actionitem' + (cls? ' '+cls : '');
+      it.innerHTML = '<span class="emoji">'+emoji+'</span><span>'+label+'</span>';
+      it.addEventListener('click', fn);
+      list.appendChild(it);
+    }
+
+    var hasBothParents = n.parentIds && n.parentIds.length>=2;
+    addItem('👤', hasBothParents? 'Parents already added' : 'Add parent', function(){
+      if(hasBothParents){ showToast('Already has two parents'); return; }
+      closeOverlay('actionOverlay');
+      openForm({ mode:'addParent', forId:id });
+    });
+    addItem('💍', 'Add spouse / partner', function(){
+      closeOverlay('actionOverlay');
+      openForm({ mode:'addSpouse', forId:id });
+    });
+    addItem('👶', 'Add child', function(){
+      closeOverlay('actionOverlay');
+      startAddChild(id);
+    });
+    addItem('✏️', 'Edit details', function(){
+      closeOverlay('actionOverlay');
+      openForm({ mode:'edit', forId:id });
+    });
+    if(!n.isMe){
+      addItem('🗑️', 'Remove person', function(){
+        closeOverlay('actionOverlay');
+        if(confirm('Remove '+(n.name||'this person')+'? This can\'t be undone.')){
+          delete state.nodes[id];
+          unlinkNodeReferences(id);
+          save(); render();
+          showToast('Removed');
+        }
+      }, 'remove');
+    }
+    showOverlay('actionOverlay');
+  }
+  document.getElementById('actionCancel').addEventListener('click', function(){ closeOverlay('actionOverlay'); });
+
+  function startAddChild(parentId){
+    var n = getNode(parentId);
+    var spouses = (n.spouseIds||[]).filter(function(s){ return state.nodes[s]; });
+    if(spouses.length === 0){
+      openForm({ mode:'addChild', forId:parentId, otherParentId:null });
+      return;
+    }
+    var list = document.getElementById('spouseChoiceList');
+    list.innerHTML = '';
+    spouses.forEach(function(sid){
+      var sp = getNode(sid);
+      var it = document.createElement('div');
+      it.className = 'actionitem';
+      it.innerHTML = '<span class="emoji">💍</span><span>'+escapeHtml(sp.name||'Unnamed')+'</span>';
+      it.addEventListener('click', function(){
+        closeOverlay('spouseChoiceOverlay');
+        openForm({ mode:'addChild', forId:parentId, otherParentId:sid });
+      });
+      list.appendChild(it);
+    });
+    var itNone = document.createElement('div');
+    itNone.className = 'actionitem';
+    itNone.innerHTML = '<span class="emoji">➖</span><span>Other parent not recorded</span>';
+    itNone.addEventListener('click', function(){
+      closeOverlay('spouseChoiceOverlay');
+      openForm({ mode:'addChild', forId:parentId, otherParentId:null });
+    });
+    list.appendChild(itNone);
+    showOverlay('spouseChoiceOverlay');
+  }
+  document.getElementById('spouseChoiceCancel').addEventListener('click', function(){ closeOverlay('spouseChoiceOverlay'); });
+
+  /* ---------------- Form (add/edit) ---------------- */
+  var formCtx = null;
+  var pendingPhoto = null;
+
+  function openForm(ctx){
+    formCtx = ctx;
+    pendingPhoto = null;
+    var titleMap = { addParent:'Add parent', addSpouse:'Add spouse / partner', addChild:'Add child', edit:'Edit details' };
+    document.getElementById('formTitle').textContent = titleMap[ctx.mode] || 'Add person';
+    document.getElementById('marriageDateField').style.display = ctx.mode==='addSpouse' ? 'block' : 'none';
+    document.getElementById('fMarriageDate').value = '';
+
+    var editing = ctx.mode === 'edit' ? getNode(ctx.forId) : null;
+    document.getElementById('fName').value = editing ? (editing.name||'') : '';
+    document.getElementById('fBirth').value = editing ? (editing.birth||'') : '';
+    document.getElementById('fDeath').value = editing ? (editing.death||'') : '';
+    setSexSelection(editing ? editing.sex : null);
+    var preview = document.getElementById('fPhotoPreview');
+    if(editing && editing.photo){
+      preview.innerHTML = '<img src="'+editing.photo+'">';
+      pendingPhoto = editing.photo;
+    } else {
+      preview.innerHTML = 'None';
+    }
+    showOverlay('formOverlay');
+  }
+
+  function setSexSelection(sex){
+    Array.prototype.slice.call(document.querySelectorAll('.sexbtn')).forEach(function(b){
+      b.classList.toggle('active', b.dataset.sex===sex);
+    });
+  }
+  Array.prototype.slice.call(document.querySelectorAll('.sexbtn')).forEach(function(b){
+    b.addEventListener('click', function(){ setSexSelection(b.dataset.sex); });
+  });
+
+  document.getElementById('fPhotoBtn').addEventListener('click', function(){
+    document.getElementById('fPhotoFile').click();
+  });
+  document.getElementById('fPhotoFile').addEventListener('change', function(e){
+    var file = e.target.files[0];
+    if(!file) return;
+    var reader = new FileReader();
+    reader.onload = function(ev){
+      var img = new Image();
+      img.onload = function(){
+        var maxDim = 220;
+        var w = img.width, h = img.height;
+        var scaleF = Math.min(1, maxDim/Math.max(w,h));
+        var cw = Math.round(w*scaleF), ch = Math.round(h*scaleF);
+        var canvas = document.createElement('canvas');
+        canvas.width = cw; canvas.height = ch;
+        canvas.getContext('2d').drawImage(img,0,0,cw,ch);
+        var dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        pendingPhoto = dataUrl;
+        document.getElementById('fPhotoPreview').innerHTML = '<img src="'+dataUrl+'">';
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  document.getElementById('formCancel').addEventListener('click', function(){ closeOverlay('formOverlay'); });
+  document.getElementById('formSave').addEventListener('click', function(){
+    var name = document.getElementById('fName').value.trim();
+    var sexBtn = document.querySelector('.sexbtn.active');
+    var sex = sexBtn ? sexBtn.dataset.sex : 'O';
+    var birth = document.getElementById('fBirth').value;
+    var death = document.getElementById('fDeath').value;
+
+    if(!name){ showToast('Enter a name'); return; }
+
+    if(formCtx.mode === 'edit'){
+      var n = getNode(formCtx.forId);
+      n.name = name; n.sex = sex; n.birth = birth; n.death = death; n.photo = pendingPhoto;
+      save(); render(); closeOverlay('formOverlay');
+      return;
+    }
+
+    var newNode = { id: uid(), name:name, sex:sex, photo:pendingPhoto, birth:birth, death:death, parentIds:[], spouseIds:[] };
+    state.nodes[newNode.id] = newNode;
+
+    if(formCtx.mode === 'addParent'){
+      var child = getNode(formCtx.forId);
+      child.parentIds = child.parentIds || [];
+      child.parentIds.push(newNode.id);
+      // auto-link with existing other parent as spouses
+      if(child.parentIds.length===2){
+        linkSpouses(child.parentIds[0], child.parentIds[1]);
+      }
+    } else if(formCtx.mode === 'addSpouse'){
+      var marriageDate = document.getElementById('fMarriageDate').value;
+      linkSpouses(formCtx.forId, newNode.id, marriageDate);
+    } else if(formCtx.mode === 'addChild'){
+      newNode.parentIds = [formCtx.forId];
+      if(formCtx.otherParentId) newNode.parentIds.push(formCtx.otherParentId);
+    }
+
+    save(); render(); closeOverlay('formOverlay');
+    showToast('Saved');
+  });
+
+  /* ---------------- Overlays ---------------- */
+  function showOverlay(id){ document.getElementById(id).classList.add('show'); }
+  function closeOverlay(id){ document.getElementById(id).classList.remove('show'); }
+  Array.prototype.slice.call(document.querySelectorAll('.overlay')).forEach(function(ov){
+    ov.addEventListener('click', function(e){ if(e.target===ov) ov.classList.remove('show'); });
+  });
+
+  /* ---------------- About ---------------- */
+  document.getElementById('btnAbout').addEventListener('click', function(){ showOverlay('aboutOverlay'); });
+  document.getElementById('aboutClose').addEventListener('click', function(){ closeOverlay('aboutOverlay'); });
+
+  /* ---------------- Search ---------------- */
+  document.getElementById('btnSearch').addEventListener('click', function(){
+    document.getElementById('searchInput').value='';
+    document.getElementById('searchResults').innerHTML='';
+    showOverlay('searchOverlay');
+    setTimeout(function(){ document.getElementById('searchInput').focus(); }, 150);
+  });
+  document.getElementById('searchCancel').addEventListener('click', function(){ closeOverlay('searchOverlay'); });
+  document.getElementById('searchInput').addEventListener('input', function(e){
+    var q = e.target.value.trim().toLowerCase();
+    var results = document.getElementById('searchResults');
+    results.innerHTML = '';
+    if(!q) return;
+    allNodes().filter(function(n){ return (n.name||'').toLowerCase().indexOf(q)!==-1; })
+      .slice(0,8).forEach(function(n){
+        var it = document.createElement('div');
+        it.className = 'actionitem';
+        it.innerHTML = '<span class="emoji">👤</span><span>'+escapeHtml(n.name||'Unnamed')+'</span>';
+        it.addEventListener('click', function(){
+          closeOverlay('searchOverlay');
+          focusNode(n.id);
+        });
+        results.appendChild(it);
+      });
+  });
+  function focusNode(id){
+    var layout = computeLayout();
+    var p = layout.positions[id];
+    if(!p) return;
+    panX = viewport.clientWidth/2 - (p.x+NODE_W/2)*scale;
+    panY = viewport.clientHeight/2 - (p.y+NODE_H/2)*scale;
+    applyTransform();
+    var el = world.querySelector('.node[data-id="'+id+'"]');
+    if(el){
+      el.classList.add('highlighted');
+      setTimeout(function(){ el.classList.remove('highlighted'); }, 1600);
+    }
+  }
+
+  /* ---------------- Backup / Restore ---------------- */
+  document.getElementById('btnBackup').addEventListener('click', function(){
+    var blob = new Blob([JSON.stringify(state, null, 2)], { type:'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'family-tree-backup-' + new Date().toISOString().slice(0,10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    showToast('Backup downloaded');
+  });
+  document.getElementById('btnRestore').addEventListener('click', function(){
+    document.getElementById('restoreFile').click();
+  });
+  document.getElementById('restoreFile').addEventListener('change', function(e){
+    var file = e.target.files[0];
+    if(!file) return;
+    var reader = new FileReader();
+    reader.onload = function(ev){
+      try{
+        var data = JSON.parse(ev.target.result);
+        if(!data.nodes) throw new Error('bad file');
+        if(confirm('Replace the current tree with this backup?')){
+          state = data;
+          save(); render(); centerOnMe();
+          showToast('Restored');
+        }
+      }catch(err){
+        showToast('Could not read that file');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  });
+
+  /* ---------------- Init ---------------- */
+  load();
+  render();
+  requestAnimationFrame(function(){ centerOnMe(); });
+
+  window.addEventListener('resize', function(){ /* keep pan/scale as-is */ });
+
+})();
+</script>
+</body>
+</html>
