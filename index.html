@@ -539,29 +539,89 @@
       reindex();
     }
 
-    // assign x slots
-    var positions = {};
-    var maxSlots = 0;
+    // ---- Continuous x positions: initial slots, then relax so children
+    // center under their parent unit (and vice versa), with overlap
+    // resolution so units never collide. Layer *order* was already fixed
+    // by the barycenter passes above; this only adjusts x within that order.
+    var unitsById = {};
+    units.forEach(function(u){ unitsById[u.id] = u; });
+    var unitWidth = {};
+    units.forEach(function(u){ unitWidth[u.id] = u.members.length * SLOT_W; });
+
+    var centerX = {};
     Object.keys(layers).forEach(function(g){
       var cursor = 0;
       layers[g].forEach(function(u){
-        u.members.forEach(function(mid, i){
-          positions[mid] = { slotX: cursor + i, gen: parseInt(g,10) };
-        });
-        cursor += u.members.length;
+        centerX[u.id] = cursor + unitWidth[u.id]/2;
+        cursor += unitWidth[u.id];
       });
-      maxSlots = Math.max(maxSlots, cursor);
     });
 
-    var minGenActual = Math.min.apply(null, Object.keys(layers).map(Number));
+    var MARGIN = 40;
+    function resolveOverlaps(list){
+      for(var i=1;i<list.length;i++){
+        var prev = list[i-1], cur = list[i];
+        var minGap = unitWidth[prev.id]/2 + unitWidth[cur.id]/2 + MARGIN;
+        if(centerX[cur.id] < centerX[prev.id] + minGap){
+          centerX[cur.id] = centerX[prev.id] + minGap;
+        }
+      }
+    }
+
+    var gensSorted = Object.keys(layers).map(Number).sort(function(a,b){return a-b;});
+
+    for(var relaxPass=0; relaxPass<6; relaxPass++){
+      // downward: align to average x of parent units
+      gensSorted.forEach(function(g){
+        layers[g].forEach(function(u){
+          var parentIds = unitParentUnits(u);
+          if(parentIds.length){
+            var sum=0, n=0;
+            parentIds.forEach(function(pid){ if(centerX[pid]!==undefined){ sum+=centerX[pid]; n++; } });
+            if(n) centerX[u.id] = sum/n;
+          }
+        });
+        resolveOverlaps(layers[g]);
+      });
+      // upward: align to average x of child units
+      gensSorted.slice().reverse().forEach(function(g){
+        layers[g].forEach(function(u){
+          var childIds = unitChildUnits(u);
+          if(childIds.length){
+            var sum=0, n=0;
+            childIds.forEach(function(cid){ if(centerX[cid]!==undefined){ sum+=centerX[cid]; n++; } });
+            if(n) centerX[u.id] = sum/n;
+          }
+        });
+        resolveOverlaps(layers[g]);
+      });
+    }
+
+    var minGenActual = gensSorted[0];
     var pixelPositions = {};
-    Object.keys(positions).forEach(function(id){
-      var p = positions[id];
-      pixelPositions[id] = {
-        x: p.slotX * SLOT_W,
-        y: (p.gen - minGenActual) * ROW_H
+    Object.keys(unitOfNode).forEach(function(nid){
+      var uId = unitOfNode[nid];
+      var u = unitsById[uId];
+      var idxInUnit = u.members.indexOf(nid);
+      var leftEdge = centerX[uId] - unitWidth[uId]/2;
+      pixelPositions[nid] = {
+        x: leftEdge + idxInUnit*SLOT_W,
+        y: (unitGen[uId] - minGenActual) * ROW_H
       };
     });
+
+    // normalize so leftmost unit sits at a positive margin (relaxation can
+    // drift everything negative), and compute a tight bounding width/height
+    var minX=Infinity, maxX=-Infinity;
+    units.forEach(function(u){
+      var left = centerX[u.id]-unitWidth[u.id]/2;
+      var right = centerX[u.id]+unitWidth[u.id]/2;
+      minX=Math.min(minX,left); maxX=Math.max(maxX,right);
+    });
+    var shiftX = -minX + 60;
+    Object.keys(pixelPositions).forEach(function(nid){ pixelPositions[nid].x += shiftX; });
+    var width = (maxX-minX) + 260;
+    var height = gensSorted.length*ROW_H + 200;
 
     // edges: parent-unit-midpoint -> child
     var edges = [];
@@ -586,9 +646,6 @@
         spouseEdges.push({ x1: a.x+NODE_W, y1: a.y+NODE_H/2, x2: b.x, y2: b.y+NODE_H/2 });
       }
     });
-
-    var width = (maxSlots)*SLOT_W + 200;
-    var height = (Object.keys(layers).length)*ROW_H + 200;
 
     return { positions: pixelPositions, edges: edges, spouseEdges: spouseEdges, width: width, height: height };
   }
@@ -705,9 +762,7 @@
   }
   document.getElementById('btnZoomIn').addEventListener('click', function(){ zoomBy(0.15); });
   document.getElementById('btnZoomOut').addEventListener('click', function(){ zoomBy(-0.15); });
-  document.getElementById('btnZoomReset').addEventListener('click', function(){
-    scale=1; centerOnMe();
-  });
+  document.getElementById('btnZoomReset').addEventListener('click', function(){ fitToView(); });
 
   function centerOnMe(){
     var me = allNodes().filter(function(n){return n.isMe;})[0];
@@ -719,6 +774,28 @@
     } else {
       panX = 40; panY = 40;
     }
+    applyTransform();
+  }
+
+  // Fit the whole tree in view — used on load and via the reset (⤾) button.
+  function fitToView(){
+    var layout = computeLayout();
+    var ids = Object.keys(layout.positions);
+    if(!ids.length){ scale=1; panX=40; panY=40; applyTransform(); return; }
+    var minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+    ids.forEach(function(id){
+      var p = layout.positions[id];
+      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x+NODE_W); maxY = Math.max(maxY, p.y+NODE_H);
+    });
+    var treeW = maxX-minX, treeH = maxY-minY;
+    var vw = viewport.clientWidth, vh = viewport.clientHeight;
+    var margin = 60;
+    var newScale = Math.min((vw-margin*2)/treeW, (vh-margin*2)/treeH, 1.15);
+    newScale = Math.max(newScale, 0.35);
+    scale = newScale;
+    panX = (vw - treeW*scale)/2 - minX*scale;
+    panY = (vh - treeH*scale)/2 - minY*scale;
     applyTransform();
   }
 
@@ -982,7 +1059,7 @@
         if(!data.nodes) throw new Error('bad file');
         if(confirm('Replace the current tree with this backup?')){
           state = data;
-          save(); render(); centerOnMe();
+          save(); render(); fitToView();
           showToast('Restored');
         }
       }catch(err){
@@ -996,7 +1073,7 @@
   /* ---------------- Init ---------------- */
   load();
   render();
-  requestAnimationFrame(function(){ centerOnMe(); });
+  requestAnimationFrame(function(){ fitToView(); });
 
   window.addEventListener('resize', function(){ /* keep pan/scale as-is */ });
 
