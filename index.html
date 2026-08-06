@@ -79,7 +79,7 @@
     position:absolute; top:0; left:0; transform-origin: 0 0;
   }
   svg#lines{ position:absolute; top:0; left:0; overflow:visible; pointer-events:none; }
-  .branch{ fill:none; stroke:var(--line); stroke-width:2.5; opacity:0.75; }
+  .branch{ fill:none; stroke:var(--line); stroke-width:2.5; opacity:0.75; stroke-linejoin:round; }
   .spouseline{ stroke:var(--gold); stroke-width:3; opacity:0.85; }
 
   /* ---------- Node card ---------- */
@@ -678,7 +678,7 @@
     layout.edges.forEach(function(e){
       var midY = (e.y1 + e.y2)/2;
       var path = document.createElementNS('http://www.w3.org/2000/svg','path');
-      var d = 'M '+e.x1+' '+e.y1+' C '+e.x1+' '+midY+', '+e.x2+' '+midY+', '+e.x2+' '+e.y2;
+      var d = 'M '+e.x1+' '+e.y1+' L '+e.x1+' '+midY+' L '+e.x2+' '+midY+' L '+e.x2+' '+e.y2;
       path.setAttribute('d', d);
       path.setAttribute('class','branch');
       svg.appendChild(path);
