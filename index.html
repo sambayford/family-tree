@@ -568,29 +568,68 @@
       }
     }
 
+    // Alignment must target the actual blood-relative's card, not the
+    // midpoint of a whole spouse-pair — otherwise a child with their own
+    // spouse gets pulled by their unit's average, and the connector has to
+    // jog sideways to reach the actual child. OFFSET converts between a
+    // unit's block-center (centerX) and the x where its connector line
+    // actually starts/ends (average of member card centers) — that
+    // average simplifies to a constant offset independent of member count.
+    var OFFSET = (SLOT_W - NODE_W) / 2;
+    function memberNodeCenterX(mid){
+      var uId = unitOfNode[mid];
+      var u = unitsById[uId];
+      var i = u.members.indexOf(mid);
+      var n = u.members.length;
+      return centerX[uId] + SLOT_W*(i - n/2) + NODE_W/2;
+    }
+    function unitConnectPointX(u){ return centerX[u.id] - OFFSET; }
+    function unitLinkedChildren(u){
+      var seen = {}, out = [];
+      u.members.forEach(function(mid){
+        childrenOf(mid).forEach(function(ch){ if(!seen[ch.id]){ seen[ch.id]=true; out.push(ch.id); } });
+      });
+      return out;
+    }
+
     var gensSorted = Object.keys(layers).map(Number).sort(function(a,b){return a-b;});
 
     for(var relaxPass=0; relaxPass<6; relaxPass++){
-      // downward: align to average x of parent units
       gensSorted.forEach(function(g){
         layers[g].forEach(function(u){
-          var parentIds = unitParentUnits(u);
-          if(parentIds.length){
-            var sum=0, n=0;
-            parentIds.forEach(function(pid){ if(centerX[pid]!==undefined){ sum+=centerX[pid]; n++; } });
-            if(n) centerX[u.id] = sum/n;
-          }
-        });
-        resolveOverlaps(layers[g]);
-      });
-      // upward: align to average x of child units
-      gensSorted.slice().reverse().forEach(function(g){
-        layers[g].forEach(function(u){
-          var childIds = unitChildUnits(u);
-          if(childIds.length){
-            var sum=0, n=0;
-            childIds.forEach(function(cid){ if(centerX[cid]!==undefined){ sum+=centerX[cid]; n++; } });
-            if(n) centerX[u.id] = sum/n;
+          // Priority: if this unit has known parents, align to them —
+          // full stop. A person's position is defined by their ancestry,
+          // not perturbed by their own descendants; otherwise someone
+          // with both parents and kids would get torn between the two
+          // and end up centered under neither. Only units with no known
+          // parents (top-of-branch ancestors) get positioned by
+          // averaging their children instead.
+          var bloodMembers = u.members.filter(function(mid){
+            return (getNode(mid).parentIds||[]).some(function(p){ return state.nodes[p] && unitOfNode[p]; });
+          });
+          if(bloodMembers.length){
+            var downCandidates = [];
+            bloodMembers.forEach(function(mid){
+              var i = u.members.indexOf(mid), n = u.members.length;
+              var parentUnitIds = {};
+              (getNode(mid).parentIds||[]).forEach(function(p){ if(state.nodes[p] && unitOfNode[p]) parentUnitIds[unitOfNode[p]]=true; });
+              var ids = Object.keys(parentUnitIds);
+              if(!ids.length) return;
+              var sum=0;
+              ids.forEach(function(puId){ sum += unitConnectPointX(unitsById[puId]); });
+              var target = sum/ids.length;
+              downCandidates.push(target - SLOT_W*(i - n/2) - NODE_W/2);
+            });
+            if(downCandidates.length){
+              centerX[u.id] = downCandidates.reduce(function(a,b){return a+b;},0)/downCandidates.length;
+            }
+          } else {
+            var childIds = unitLinkedChildren(u);
+            if(childIds.length){
+              var csum=0;
+              childIds.forEach(function(cid){ csum += memberNodeCenterX(cid); });
+              centerX[u.id] = (csum/childIds.length) + OFFSET;
+            }
           }
         });
         resolveOverlaps(layers[g]);
