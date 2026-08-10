@@ -505,7 +505,13 @@
       members.sort(function(x,y){
         var sexOrder = {M:0,F:1,O:2};
         var nx=getNode(x), ny=getNode(y);
-        return (sexOrder[nx.sex]||2) - (sexOrder[ny.sex]||2);
+        // NOT `sexOrder[sex]||2` — Male maps to 0, which is falsy, so
+        // `0||2` silently became 2 and broke Male-before-Female ordering
+        // for every pair. Use `in` to only fall back for truly unknown
+        // values.
+        var xo = (nx.sex in sexOrder) ? sexOrder[nx.sex] : 2;
+        var yo = (ny.sex in sexOrder) ? sexOrder[ny.sex] : 2;
+        return xo - yo;
       });
       var unitId = 'u_' + n.id;
       units.push({ id: unitId, members: members });
@@ -636,12 +642,38 @@
     });
 
     var MARGIN = 40;
+    // A pure left-to-right push anchors the LEFTMOST unit exactly at its
+    // ideal target and cascades everyone after it rightward — fine when
+    // targets already differ, but when several units share nearly the
+    // same ideal target (e.g. three full siblings, all wanting to center
+    // under the same parents), only the first keeps that target and the
+    // rest drift right, dragging the whole cluster's center away from
+    // where it should be. Averaging a forward push and a backward pull
+    // centers symmetric clusters around their true shared target instead
+    // of favoring whoever happened to sort first; a final corrective
+    // sweep guarantees no overlaps remain after the averaging.
     function resolveOverlaps(list){
-      for(var i=1;i<list.length;i++){
-        var prev = list[i-1], cur = list[i];
-        var minGap = unitWidth[prev.id]/2 + unitWidth[cur.id]/2 + MARGIN;
-        if(centerX[cur.id] < centerX[prev.id] + minGap){
-          centerX[cur.id] = centerX[prev.id] + minGap;
+      var n = list.length;
+      if(n <= 1) return;
+      var ideal = list.map(function(u){ return centerX[u.id]; });
+      var forward = new Array(n), backward = new Array(n);
+      forward[0] = ideal[0];
+      for(var i=1;i<n;i++){
+        var gapF = unitWidth[list[i-1].id]/2 + unitWidth[list[i].id]/2 + MARGIN;
+        forward[i] = Math.max(ideal[i], forward[i-1]+gapF);
+      }
+      backward[n-1] = ideal[n-1];
+      for(var j=n-2;j>=0;j--){
+        var gapB = unitWidth[list[j].id]/2 + unitWidth[list[j+1].id]/2 + MARGIN;
+        backward[j] = Math.min(ideal[j], backward[j+1]-gapB);
+      }
+      for(var k=0;k<n;k++){
+        centerX[list[k].id] = (forward[k]+backward[k])/2;
+      }
+      for(var m=1;m<n;m++){
+        var minGap = unitWidth[list[m-1].id]/2 + unitWidth[list[m].id]/2 + MARGIN;
+        if(centerX[list[m].id] < centerX[list[m-1].id] + minGap){
+          centerX[list[m].id] = centerX[list[m-1].id] + minGap;
         }
       }
     }
@@ -661,17 +693,21 @@
       var n = u.members.length;
       return centerX[uId] + SLOT_W*(i - n/2) + NODE_W/2;
     }
-    function unitLinkedChildren(u){
-      var seen = {}, out = [];
-      u.members.forEach(function(mid){
-        childrenOf(mid).forEach(function(ch){ if(!seen[ch.id]){ seen[ch.id]=true; out.push(ch.id); } });
-      });
-      return out;
-    }
-
     var gensSorted = Object.keys(layers).map(Number).sort(function(a,b){return a-b;});
 
-    for(var relaxPass=0; relaxPass<6; relaxPass++){
+    for(var relaxPass=0; relaxPass<8; relaxPass++){
+      // Process generations top-to-bottom and resolve overlaps for each
+      // generation IMMEDIATELY after computing it, before moving to the
+      // next. This matters: a top generation's units can get pushed
+      // sideways by overlap resolution against an unrelated sibling-unit
+      // in their own row (e.g. Karen+Terrence shifting right to avoid
+      // colliding with Karen's other ex, Phillip). If that resolution is
+      // deferred to the very end (as an earlier version of this code
+      // did), children below have already aligned to the PRE-shift
+      // parent position and never find out their parents just moved —
+      // the two rows end up misaligned by exactly that shift. Resolving
+      // generation-by-generation as we go means each generation's
+      // children always align against their parents' truly final spot.
       gensSorted.forEach(function(g){
         layers[g].forEach(function(u){
           // Priority: if this unit has known parents, align to them —
@@ -703,14 +739,38 @@
               centerX[u.id] = downCandidates.reduce(function(a,b){return a+b;},0)/downCandidates.length;
             }
           } else {
-            var childIds = unitLinkedChildren(u);
-            if(childIds.length){
-              var csum=0;
-              childIds.forEach(function(cid){ csum += memberNodeCenterX(cid); });
-              centerX[u.id] = (csum/childIds.length) + OFFSET;
+            // Mirror image of the downward pass, per member — NOT a flat
+            // "every child of either member" average. That flattening was
+            // a real bug: if Karen (paired with Terrence here) also has a
+            // child with a different partner (blended family), that child
+            // isn't Terrence's, so they shouldn't pull on this pair's
+            // shared position at all — doing so dragged Karen+Terrence's
+            // whole unit away from their actual shared kids (Samuel,
+            // Gemma-Tiffany, Matilda), which cascaded into all of them
+            // rendering far from their true parent midpoint. Each member
+            // contributes a candidate based ONLY on their own children.
+            var upCandidates = [];
+            u.members.forEach(function(mid){
+              var kids = childrenOf(mid);
+              if(!kids.length) return;
+              var i = u.members.indexOf(mid), n = u.members.length;
+              var sum=0;
+              kids.forEach(function(c){ sum += memberNodeCenterX(c.id); });
+              var target = sum/kids.length;
+              upCandidates.push(target - SLOT_W*(i - n/2) - NODE_W/2);
+            });
+            if(upCandidates.length){
+              centerX[u.id] = upCandidates.reduce(function(a,b){return a+b;},0)/upCandidates.length;
             }
           }
         });
+        // Re-derive this generation's left-right order from the ideal
+        // (possibly overlapping) positions just computed — NOT the
+        // earlier child-position-biased barycenter ordering — then
+        // resolve overlaps in that corrected order immediately, so the
+        // NEXT generation down (processed later in this same pass) sees
+        // this generation's truly final positions.
+        layers[g].sort(function(a,b){ return centerX[a.id] - centerX[b.id]; });
         resolveOverlaps(layers[g]);
       });
     }
