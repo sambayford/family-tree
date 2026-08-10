@@ -69,6 +69,7 @@
   #viewport{
     position:absolute; top:58px; left:0; right:0; bottom:0;
     overflow:hidden; cursor:grab;
+    touch-action:none;
     background-image:
       linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
       linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
@@ -77,6 +78,7 @@
   #viewport.dragging{ cursor:grabbing; }
   #world{
     position:absolute; top:0; left:0; transform-origin: 0 0;
+    will-change: transform;
   }
   svg#lines{ position:absolute; top:0; left:0; overflow:visible; pointer-events:none; }
   .branch{ fill:none; stroke:var(--line); stroke-width:2.5; opacity:0.75; stroke-linejoin:round; }
@@ -874,11 +876,19 @@
   }
 
   function applyTransform(){
-    world.style.transform = 'translate('+panX+'px,'+panY+'px) scale('+scale+')';
+    world.style.transform = 'translate3d('+panX+'px,'+panY+'px,0) scale('+scale+')';
   }
 
   /* ---------------- Pan & zoom ---------------- */
   var isPanning=false, panStart={x:0,y:0}, panOrigin={x:0,y:0};
+  var panRAF = null;
+  function schedulePanUpdate(){
+    if(panRAF) return;
+    panRAF = requestAnimationFrame(function(){
+      panRAF = null;
+      applyTransform();
+    });
+  }
   viewport.addEventListener('pointerdown', function(e){
     if(e.target.closest('.node')) return;
     isPanning = true;
@@ -891,7 +901,7 @@
     if(!isPanning) return;
     panX = panOrigin.x + (e.clientX - panStart.x);
     panY = panOrigin.y + (e.clientY - panStart.y);
-    applyTransform();
+    schedulePanUpdate();
   });
   ['pointerup','pointercancel'].forEach(function(ev){
     viewport.addEventListener(ev, function(){ isPanning=false; viewport.classList.remove('dragging'); });
