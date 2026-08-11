@@ -222,10 +222,12 @@
   </div>
   <div class="topbtns">
     <button class="iconbtn" id="btnSearch" title="Find person">🔍</button>
+    <button class="iconbtn" id="btnGedcom" title="GEDCOM import/export">🧬</button>
     <button class="iconbtn" id="btnBackup" title="Backup">⇩</button>
     <button class="iconbtn" id="btnRestore" title="Restore">⇧</button>
     <button class="iconbtn" id="btnAbout" title="About">ℹ️</button>
     <input type="file" id="restoreFile" accept="application/json" style="display:none">
+    <input type="file" id="gedcomFile" accept=".ged,text/plain" style="display:none">
   </div>
 </div>
 
@@ -328,6 +330,46 @@
     <div class="btnrow">
       <button class="btn secondary" id="marriageCancel">Cancel</button>
       <button class="btn primary" id="marriageSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- GEDCOM choice -->
+<div class="overlay" id="gedcomOverlay">
+  <div class="sheet">
+    <h2>GEDCOM</h2>
+    <div class="actionlist">
+      <div class="actionitem" id="gedcomExportBtn"><span class="emoji">⬇️</span><span>Export GEDCOM</span></div>
+      <div class="actionitem" id="gedcomImportBtn"><span class="emoji">⬆️</span><span>Import GEDCOM</span></div>
+    </div>
+    <div class="btnrow">
+      <button class="btn secondary" id="gedcomCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- GEDCOM import review -->
+<div class="overlay" id="gedcomReviewOverlay">
+  <div class="sheet">
+    <h2>Review import</h2>
+    <p style="font-size:13px; color:#7a7160; margin:-8px 0 12px;">
+      Tap a person with a possible match to choose merge vs. add as new.
+    </p>
+    <div class="actionlist" id="gedcomReviewList" style="max-height:52vh; overflow-y:auto;"></div>
+    <div class="btnrow">
+      <button class="btn secondary" id="gedcomReviewCancel">Cancel</button>
+      <button class="btn primary" id="gedcomReviewConfirm">Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- GEDCOM per-person merge choice -->
+<div class="overlay" id="gedcomMergeOverlay">
+  <div class="sheet">
+    <h2 id="gedcomMergeTitle">Match found</h2>
+    <div class="actionlist" id="gedcomMergeList"></div>
+    <div class="btnrow">
+      <button class="btn secondary" id="gedcomMergeCancel">Cancel</button>
     </div>
   </div>
 </div>
@@ -1147,6 +1189,375 @@
     save(); render(); closeOverlay('marriageOverlay');
     showToast('Saved');
   });
+
+  /* ================= GEDCOM import/export ================= */
+  // Covers the common subset used for interchange between genealogy
+  // tools: INDI (NAME/SEX/BIRT/DEAT/FAMC/FAMS) and FAM (HUSB/WIFE/CHIL/
+  // MARR/DIV). Deliberately NOT handled (out of scope for this app):
+  // photos/OBJE, notes, sources, multiple/ambiguous FAMC per person,
+  // adoption vs birth relationship types. Sam's own photos never leave
+  // this device via GEDCOM — that's a JSON-backup-only thing.
+
+  var GEDCOM_MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+
+  function isoToGedcomDate(iso){
+    if(!iso) return '';
+    var parts = iso.split('-');
+    if(parts.length !== 3) return '';
+    var y = parts[0], m = parseInt(parts[1],10), d = parseInt(parts[2],10);
+    if(!y || !m || !d || m<1 || m>12) return '';
+    return (d<10?'0':'')+d+' '+GEDCOM_MONTHS[m-1]+' '+y;
+  }
+  function gedcomDateToIso(str){
+    if(!str) return '';
+    str = str.trim().toUpperCase();
+    var m = str.match(/^(\d{1,2})\s+([A-Z]{3})\s+(\d{4})$/);
+    if(m){
+      var day = parseInt(m[1],10), monIdx = GEDCOM_MONTHS.indexOf(m[2]);
+      if(monIdx===-1) return '';
+      return m[3]+'-'+String(monIdx+1).padStart(2,'0')+'-'+String(day).padStart(2,'0');
+    }
+    // Partial dates ("JUN 1965" or just "1965") can't populate a plain
+    // <input type=date> precisely — skip rather than guess a fake day.
+    return '';
+  }
+  function splitNameForGedcom(name){
+    name = (name||'').trim();
+    if(!name) return { given:'', surname:'' };
+    var parts = name.split(/\s+/);
+    if(parts.length===1) return { given: parts[0], surname:'' };
+    return { given: parts.slice(0,-1).join(' '), surname: parts[parts.length-1] };
+  }
+  function joinNameFromGedcom(given, surname){
+    return (given.trim()+' '+surname.trim()).trim();
+  }
+
+  function exportGedcom(){
+    var nodes = allNodes();
+    if(!nodes.length){ showToast('Nothing to export'); return; }
+    var indiRef = {}; // node.id -> 'I1'
+    nodes.forEach(function(n,i){ indiRef[n.id] = 'I'+(i+1); });
+
+    // One FAM per distinct parent-set that actually has children, plus
+    // one per recorded marriage that doesn't already have children
+    // (so a childless couple still gets linked via FAMS).
+    var famOf = {}; // familyKey -> { ref, husb, wife, chil:[], date, divorced }
+    var famList = [];
+    function familyKeyFor(parentIds){
+      return parentIds.slice().sort().join('|');
+    }
+    function getOrCreateFam(parentIds){
+      var key = familyKeyFor(parentIds);
+      if(famOf[key]) return famOf[key];
+      var fam = { ref: 'F'+(famList.length+1), parentIds: parentIds, chil: [], date:'', divorced:false };
+      famOf[key] = fam;
+      famList.push(fam);
+      return fam;
+    }
+    // marriages first, so a childless couple still gets a FAM + dates
+    Object.keys(state.marriages||{}).forEach(function(k){
+      var ids = k.split('|');
+      if(!state.nodes[ids[0]] || !state.nodes[ids[1]]) return;
+      var fam = getOrCreateFam(ids);
+      var m = state.marriages[k];
+      fam.date = m.date||''; fam.divorced = !!m.divorced;
+    });
+    // then children, grouping by their actual recorded parentIds (may
+    // not match a "marriage" pair for single-parent or blended cases)
+    nodes.forEach(function(child){
+      var pids = (child.parentIds||[]).filter(function(p){ return state.nodes[p]; });
+      if(!pids.length) return;
+      var fam = getOrCreateFam(pids);
+      fam.chil.push(child.id);
+    });
+
+    var lines = [];
+    lines.push('0 HEAD');
+    lines.push('1 SOUR family-tree');
+    lines.push('1 GEDC');
+    lines.push('2 VERS 5.5.1');
+    lines.push('2 FORM LINEAGE-LINKED');
+    lines.push('1 CHAR UTF-8');
+
+    nodes.forEach(function(n){
+      var nm = splitNameForGedcom(n.name);
+      lines.push('0 @'+indiRef[n.id]+'@ INDI');
+      lines.push('1 NAME '+nm.given+' /'+nm.surname+'/');
+      if(n.sex==='M' || n.sex==='F') lines.push('1 SEX '+n.sex);
+      else lines.push('1 SEX U');
+      var bDate = isoToGedcomDate(n.birth);
+      if(bDate){ lines.push('1 BIRT'); lines.push('2 DATE '+bDate); }
+      var dDate = isoToGedcomDate(n.death);
+      if(dDate){ lines.push('1 DEAT'); lines.push('2 DATE '+dDate); }
+      famList.forEach(function(fam){
+        if(fam.chil.indexOf(n.id)!==-1) lines.push('1 FAMC @'+fam.ref+'@');
+        if(fam.parentIds.indexOf(n.id)!==-1) lines.push('1 FAMS @'+fam.ref+'@');
+      });
+    });
+
+    famList.forEach(function(fam){
+      lines.push('0 @'+fam.ref+'@ FAM');
+      fam.parentIds.forEach(function(pid){
+        var p = getNode(pid);
+        var role = (p && p.sex==='F') ? 'WIFE' : 'HUSB';
+        // if both parents would land on HUSB (e.g. two males, or one
+        // unknown-sex), fall back to assigning the second one WIFE so
+        // both still get written — GEDCOM's tags are binary by name
+        // only, this doesn't imply anything about the actual people.
+        if(role==='HUSB' && fam.parentIds.filter(function(x){var px=getNode(x); return !(px&&px.sex==='F');}).indexOf(pid) > 0){
+          role = 'WIFE';
+        }
+        lines.push('1 '+role+' @'+indiRef[pid]+'@');
+      });
+      fam.chil.forEach(function(cid){ lines.push('1 CHIL @'+indiRef[cid]+'@'); });
+      var famDate = isoToGedcomDate(fam.date);
+      if(famDate){ lines.push('1 MARR'); lines.push('2 DATE '+famDate); }
+      if(fam.divorced) lines.push('1 DIV Y');
+    });
+
+    lines.push('0 TRLR');
+
+    var blob = new Blob([lines.join('\n')], { type:'text/plain' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'family-tree-' + new Date().toISOString().slice(0,10) + '.ged';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    showToast('GEDCOM exported');
+  }
+
+  function parseGedcomText(text){
+    var lines = text.split(/\r\n|\r|\n/).filter(function(l){ return l.trim().length; });
+    var top = [];
+    var stack = []; // {level, node}
+    lines.forEach(function(raw){
+      var m = raw.match(/^\s*(\d+)\s+(?:(@[^@]+@)\s+)?(\S+)(?:\s+(.*))?$/);
+      if(!m) return;
+      var level = parseInt(m[1],10);
+      var xref = m[2] ? m[2].replace(/@/g,'') : null;
+      var tag = m[3], value = m[4]||'';
+      var node = { level:level, tag:tag, value:value, xref:xref, children:[] };
+      while(stack.length && stack[stack.length-1].level >= level) stack.pop();
+      if(stack.length) stack[stack.length-1].node.children.push(node);
+      else top.push(node);
+      stack.push({ level:level, node:node });
+    });
+
+    function findChild(node, tag){ return node.children.find(function(c){ return c.tag===tag; }); }
+    function findChildren(node, tag){ return node.children.filter(function(c){ return c.tag===tag; }); }
+
+    var individuals = {}, families = {};
+    top.forEach(function(rec){
+      if(rec.tag==='INDI' && rec.xref){
+        var nameNode = findChild(rec, 'NAME');
+        var given='', surname='';
+        if(nameNode){
+          var nm = nameNode.value.match(/^([^\/]*)\/([^\/]*)\/?/);
+          if(nm){ given=(nm[1]||'').trim(); surname=(nm[2]||'').trim(); }
+          else { given = nameNode.value.trim(); }
+        }
+        var sexNode = findChild(rec, 'SEX');
+        var birtNode = findChild(rec, 'BIRT');
+        var deatNode = findChild(rec, 'DEAT');
+        individuals[rec.xref] = {
+          gedcomId: rec.xref,
+          name: joinNameFromGedcom(given, surname),
+          sex: sexNode ? (sexNode.value==='M'?'M':sexNode.value==='F'?'F':'O') : 'O',
+          birth: birtNode ? gedcomDateToIso((findChild(birtNode,'DATE')||{}).value) : '',
+          death: deatNode ? gedcomDateToIso((findChild(deatNode,'DATE')||{}).value) : '',
+          famc: findChildren(rec,'FAMC').map(function(c){ return c.value.replace(/@/g,''); }),
+          fams: findChildren(rec,'FAMS').map(function(c){ return c.value.replace(/@/g,''); })
+        };
+      } else if(rec.tag==='FAM' && rec.xref){
+        var husb = findChild(rec,'HUSB'), wife = findChild(rec,'WIFE');
+        var marrNode = findChild(rec,'MARR');
+        var divNode = findChild(rec,'DIV');
+        families[rec.xref] = {
+          gedcomId: rec.xref,
+          husb: husb ? husb.value.replace(/@/g,'') : null,
+          wife: wife ? wife.value.replace(/@/g,'') : null,
+          chil: findChildren(rec,'CHIL').map(function(c){ return c.value.replace(/@/g,''); }),
+          date: marrNode ? gedcomDateToIso((findChild(marrNode,'DATE')||{}).value) : '',
+          divorced: !!divNode
+        };
+      }
+    });
+    return { individuals: individuals, families: families };
+  }
+
+  function findMatchesForCandidate(cand){
+    var candName = (cand.name||'').trim().toLowerCase();
+    var candYear = cand.birth ? cand.birth.split('-')[0] : '';
+    if(!candName) return [];
+    var matches = [];
+    allNodes().forEach(function(n){
+      if((n.name||'').trim().toLowerCase() !== candName) return;
+      var nYear = n.birth ? n.birth.split('-')[0] : '';
+      var strong = !!(candYear && nYear && candYear===nYear);
+      matches.push({ nodeId: n.id, name: n.name, birth: n.birth, strong: strong });
+    });
+    matches.sort(function(a,b){ return (b.strong?1:0)-(a.strong?1:0); });
+    return matches;
+  }
+
+  var gedcomImportState = null; // { individuals, families, candidates:[{...,decision}] }
+
+  function startGedcomImport(text){
+    var parsed;
+    try{ parsed = parseGedcomText(text); }
+    catch(e){ showToast('Could not read that GEDCOM file'); return; }
+    var gedcomIds = Object.keys(parsed.individuals);
+    if(!gedcomIds.length){ showToast('No people found in that file'); return; }
+
+    var candidates = gedcomIds.map(function(gid){
+      var ind = parsed.individuals[gid];
+      var matches = findMatchesForCandidate(ind);
+      var decision = matches.length && matches[0].strong
+        ? { action:'merge', targetNodeId: matches[0].nodeId }
+        : { action:'new' };
+      return { gedcomId: gid, name: ind.name, sex: ind.sex, birth: ind.birth, death: ind.death, matches: matches, decision: decision };
+    });
+
+    gedcomImportState = { individuals: parsed.individuals, families: parsed.families, candidates: candidates };
+    renderGedcomReview();
+    showOverlay('gedcomReviewOverlay');
+  }
+
+  function renderGedcomReview(){
+    var list = document.getElementById('gedcomReviewList');
+    list.innerHTML = '';
+    gedcomImportState.candidates.forEach(function(cand, idx){
+      var year = cand.birth ? cand.birth.split('-')[0] : '';
+      var label = cand.name + (year ? ' ('+year+')' : '');
+      var status;
+      if(cand.decision.action==='merge'){
+        var t = cand.matches.filter(function(m){return m.nodeId===cand.decision.targetNodeId;})[0];
+        status = 'Merge → ' + (t ? t.name : 'existing person');
+      } else {
+        status = cand.matches.length ? 'Add as new (possible match found)' : 'Add as new';
+      }
+      var it = document.createElement('div');
+      it.className = 'actionitem';
+      it.innerHTML = '<span class="emoji">'+(cand.decision.action==='merge'?'🔗':'👤')+'</span>'+
+        '<span>'+escapeHtml(label)+'<br><span style="font-size:12px; font-weight:400; color:#8a8272;">'+escapeHtml(status)+'</span></span>';
+      if(cand.matches.length){
+        it.addEventListener('click', function(){ openGedcomMergeChoice(idx); });
+      } else {
+        it.style.opacity = '0.75';
+      }
+      list.appendChild(it);
+    });
+  }
+
+  function openGedcomMergeChoice(idx){
+    var cand = gedcomImportState.candidates[idx];
+    document.getElementById('gedcomMergeTitle').textContent = cand.name;
+    var list = document.getElementById('gedcomMergeList');
+    list.innerHTML = '';
+    cand.matches.forEach(function(m){
+      var yr = m.birth ? ' ('+m.birth.split('-')[0]+')' : '';
+      var it = document.createElement('div');
+      it.className = 'actionitem';
+      it.innerHTML = '<span class="emoji">🔗</span><span>Merge with '+escapeHtml(m.name+yr)+(m.strong?' — likely match':'')+'</span>';
+      it.addEventListener('click', function(){
+        cand.decision = { action:'merge', targetNodeId: m.nodeId };
+        closeOverlay('gedcomMergeOverlay');
+        renderGedcomReview();
+      });
+      list.appendChild(it);
+    });
+    var newIt = document.createElement('div');
+    newIt.className = 'actionitem';
+    newIt.innerHTML = '<span class="emoji">➕</span><span>Add as new person</span>';
+    newIt.addEventListener('click', function(){
+      cand.decision = { action:'new' };
+      closeOverlay('gedcomMergeOverlay');
+      renderGedcomReview();
+    });
+    list.appendChild(newIt);
+    showOverlay('gedcomMergeOverlay');
+  }
+
+  function finalizeGedcomImport(){
+    if(!gedcomImportState) return;
+    var idMap = {}; // gedcomId -> internal node id
+    var newCount = 0, mergeCount = 0;
+
+    gedcomImportState.candidates.forEach(function(cand){
+      if(cand.decision.action==='merge'){
+        idMap[cand.gedcomId] = cand.decision.targetNodeId;
+        mergeCount++;
+        // backfill only genuinely missing fields — never overwrite
+        // whatever's already recorded for the existing person
+        var existing = getNode(cand.decision.targetNodeId);
+        if(existing){
+          if(!existing.birth && cand.birth) existing.birth = cand.birth;
+          if(!existing.death && cand.death) existing.death = cand.death;
+          if((!existing.sex || existing.sex==='O') && (cand.sex==='M'||cand.sex==='F')) existing.sex = cand.sex;
+        }
+      } else {
+        var node = { id: uid(), name: cand.name, sex: cand.sex, photo:null, birth: cand.birth, death: cand.death, parentIds:[], spouseIds:[] };
+        state.nodes[node.id] = node;
+        idMap[cand.gedcomId] = node.id;
+        newCount++;
+      }
+    });
+
+    Object.keys(gedcomImportState.families).forEach(function(fkey){
+      var fam = gedcomImportState.families[fkey];
+      var husbId = fam.husb ? idMap[fam.husb] : null;
+      var wifeId = fam.wife ? idMap[fam.wife] : null;
+      if(husbId && wifeId){
+        linkSpouses(husbId, wifeId, fam.date, fam.divorced);
+      }
+      var parentIds = [husbId, wifeId].filter(Boolean);
+      fam.chil.forEach(function(cgid){
+        var cid = idMap[cgid];
+        if(!cid) return;
+        var childNode = getNode(cid);
+        if(!childNode) return;
+        childNode.parentIds = childNode.parentIds || [];
+        parentIds.forEach(function(pid){
+          if(childNode.parentIds.indexOf(pid)===-1 && childNode.parentIds.length<2){
+            childNode.parentIds.push(pid);
+          }
+        });
+      });
+    });
+
+    save(); render(); fitToView();
+    closeOverlay('gedcomReviewOverlay');
+    gedcomImportState = null;
+    showToast('Imported '+newCount+' new, merged '+mergeCount);
+  }
+
+  document.getElementById('btnGedcom').addEventListener('click', function(){ showOverlay('gedcomOverlay'); });
+  document.getElementById('gedcomCancel').addEventListener('click', function(){ closeOverlay('gedcomOverlay'); });
+  document.getElementById('gedcomExportBtn').addEventListener('click', function(){
+    closeOverlay('gedcomOverlay');
+    exportGedcom();
+  });
+  document.getElementById('gedcomImportBtn').addEventListener('click', function(){
+    closeOverlay('gedcomOverlay');
+    document.getElementById('gedcomFile').click();
+  });
+  document.getElementById('gedcomFile').addEventListener('change', function(e){
+    var file = e.target.files[0];
+    if(!file) return;
+    var reader = new FileReader();
+    reader.onload = function(ev){ startGedcomImport(ev.target.result); };
+    reader.readAsText(file);
+    e.target.value = '';
+  });
+  document.getElementById('gedcomReviewCancel').addEventListener('click', function(){
+    gedcomImportState = null;
+    closeOverlay('gedcomReviewOverlay');
+  });
+  document.getElementById('gedcomReviewConfirm').addEventListener('click', finalizeGedcomImport);
+  document.getElementById('gedcomMergeCancel').addEventListener('click', function(){ closeOverlay('gedcomMergeOverlay'); });
 
   /* ---------------- Form (add/edit) ---------------- */
   var formCtx = null;
