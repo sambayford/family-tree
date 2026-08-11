@@ -342,7 +342,7 @@
       is saved on this device only (no account, no sync) — use the backup
       button to export a copy.
     </p>
-    <p style="font-size:12px; color:#9a9482; margin-top:14px;">v1.0</p>
+    <p id="aboutVersion" style="font-size:12px; color:#9a9482; margin-top:14px;">Deployment #—</p>
     <div class="btnrow">
       <button class="btn primary" id="aboutClose">Got it</button>
     </div>
@@ -1245,8 +1245,38 @@
   });
 
   /* ---------------- About ---------------- */
-  document.getElementById('btnAbout').addEventListener('click', function(){ showOverlay('aboutOverlay'); });
+  document.getElementById('btnAbout').addEventListener('click', function(){ showOverlay('aboutOverlay'); loadDeploymentInfo(); });
   document.getElementById('aboutClose').addEventListener('click', function(){ closeOverlay('aboutOverlay'); });
+
+  // Shows the live GitHub Pages deployment number (not a hand-maintained
+  // version string) so "About" always reflects what's actually deployed.
+  // Public repo, unauthenticated GitHub API read — fine for occasional
+  // personal use, well under the 60 req/hr limit. Cached after first
+  // successful fetch so re-opening About doesn't re-hit the API.
+  var deploymentInfo = null;
+  function loadDeploymentInfo(){
+    var el = document.getElementById('aboutVersion');
+    if(deploymentInfo){ renderDeploymentInfo(); return; }
+    fetch('https://api.github.com/repos/sambayford/family-tree/deployments?per_page=1')
+      .then(function(r){ if(!r.ok) throw new Error('bad response'); return r.json(); })
+      .then(function(data){
+        if(data && data[0] && data[0].id){
+          deploymentInfo = data[0];
+          renderDeploymentInfo();
+        } else {
+          el.textContent = 'Deployment info unavailable';
+        }
+      })
+      .catch(function(){
+        el.textContent = 'Deployment info unavailable';
+      });
+  }
+  function renderDeploymentInfo(){
+    var el = document.getElementById('aboutVersion');
+    var d = new Date(deploymentInfo.created_at);
+    var dateStr = isNaN(d.getTime()) ? '' : (' · ' + d.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' }));
+    el.textContent = 'Deployment #' + deploymentInfo.id + dateStr;
+  }
 
   /* ---------------- Search ---------------- */
   document.getElementById('btnSearch').addEventListener('click', function(){
