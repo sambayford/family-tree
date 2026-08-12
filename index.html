@@ -854,24 +854,21 @@
       if(!parentIds.length || !pixelPositions[child.id]) return;
       var sumX=0, sumY=0;
       parentIds.forEach(function(p){ sumX += pixelPositions[p].x + NODE_W/2; sumY += pixelPositions[p].y; });
-      // For two parents who are an adjacent couple (same positioning
-      // unit), the midpoint between their card centers falls in the
-      // narrow visual gap between the two cards — mathematically
-      // correct, but the connector then appears to start from empty
-      // space rather than visibly touching either parent. Starting it
-      // at row-center height instead of the row's bottom edge makes it
-      // meet the spouse-line (also drawn at row-center, between the
-      // same two cards) — so the branch visibly hangs off the couple's
-      // own connector rather than floating below the gap between them.
-      // Doesn't apply to a single parent (the trunk already starts
-      // exactly at that parent's own card, just hidden behind it) or to
-      // parents in different units (blended family — there's no simple
-      // adjacent spouse-line at row-center to tie into there; see the
-      // dip-routed secondary marriage lines instead).
-      var sameUnitCouple = parentIds.length===2 && unitOfNode[parentIds[0]] === unitOfNode[parentIds[1]];
+      // Trunk always starts at the row's bottom edge, never inside the
+      // row itself — confined entirely to the dedicated gap between
+      // generations (per Sam's reference: connector geometry should
+      // never enter a row's own vertical extent, only the lane between
+      // rows). An earlier version started this partway into the row,
+      // at spouse-line height, to visually tie a child's connector to
+      // their parents' spouse-line — reverted: it fixed a "looks
+      // disconnected" complaint but conflicted with this explicit
+      // reference for how the gap/lane should work. The actual
+      // disconnected-looking issue was already fixed by the generation-
+      // by-generation overlap resolution + symmetric sibling centering
+      // fixes; this trunk height wasn't doing the load-bearing work.
       edges.push({
         x1: sumX/parentIds.length,
-        y1: sumY/parentIds.length + (sameUnitCouple ? NODE_H/2 : NODE_H),
+        y1: sumY/parentIds.length + NODE_H,
         x2: pixelPositions[child.id].x + NODE_W/2,
         y2: pixelPositions[child.id].y
       });
