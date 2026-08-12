@@ -410,7 +410,16 @@
   "use strict";
 
   var STORAGE_KEY = 'family-tree-data-v1';
-  var NODE_W = 150, NODE_H = 108, SLOT_W = 176, ROW_H = 168;
+  // ROW_H - NODE_H is the dedicated inter-generation gap connector
+  // lines travel through. Widened from 60px to 150px (issue #3
+  // follow-up): the coordinates were already mathematically
+  // non-overlapping with any unrelated card, verified against real
+  // backup data down to the exact pixel — but a 60px margin apparently
+  // wasn't visually obvious enough to read as a clear lane on an actual
+  // phone screen, compared to Sam's reference app. Making the gap
+  // unmistakably large removes any ambiguity, rather than relying on a
+  // thin (if technically correct) margin.
+  var NODE_W = 150, NODE_H = 108, SLOT_W = 176, ROW_H = 258;
 
   /* ---------------- State ---------------- */
   var state = { nodes: {} };
