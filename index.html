@@ -993,7 +993,16 @@
           var drop = document.createElementNS('http://www.w3.org/2000/svg','line');
           drop.setAttribute('x1', e.dropX); drop.setAttribute('y1', e.dropY1);
           drop.setAttribute('x2', e.dropX); drop.setAttribute('y2', e.dropY2);
-          drop.setAttribute('class', e.divorced ? 'spouseline spouseline-divorced' : 'spouseline');
+          // Styled as a 'branch' (matching the child-trunk it leads into),
+          // not as a spouse-line — even for a divorced couple. It was
+          // rendered with spouseline styling before, and the visible
+          // color/width seam where it met the branch below it looked like
+          // two stitched-together segments instead of one continuous
+          // line. Divorce is a fact about the marriage (the horizontal
+          // segment above); the drop into the children's trunk isn't a
+          // marital-status line, so dashing it never made much semantic
+          // sense either — just visual consistency with the trunk now.
+          drop.setAttribute('class', 'branch');
           svg.appendChild(drop);
         }
       }
