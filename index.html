@@ -83,6 +83,14 @@
   svg#lines{ position:absolute; top:0; left:0; overflow:visible; pointer-events:none; }
   .branch{ fill:none; stroke:var(--line); stroke-width:2.5; opacity:0.75; stroke-linejoin:round; }
   .spouseline{ stroke:var(--gold); stroke-width:3; opacity:0.85; }
+  .node.hiddenbadge{
+    width:36px; height:36px; padding:0; border-radius:50%;
+    background:var(--bark-2); border:2px solid var(--gold); box-shadow:var(--shadow);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    color:var(--gold-soft); line-height:1; text-align:center;
+  }
+  .node.hiddenbadge .chev{ font-size:12px; margin-top:-2px; }
+  .node.hiddenbadge .cnt{ font-size:11px; font-weight:700; }
   .spouseline-divorced{ stroke-dasharray:6 5; opacity:0.55; }
   .spouseline-secondary{ fill:none; stroke-dasharray:6 5; opacity:0.7; stroke-linejoin:round; }
 
@@ -374,6 +382,18 @@
   </div>
 </div>
 
+<!-- Hidden people popup -->
+<div class="overlay" id="hiddenOverlay">
+  <div class="sheet">
+    <h2>Hidden people</h2>
+    <div class="actionlist" id="hiddenList" style="max-height:52vh; overflow-y:auto;"></div>
+    <div class="btnrow">
+      <button class="btn secondary" id="hiddenClose">Close</button>
+      <button class="btn primary" id="hiddenShowAll">Show all</button>
+    </div>
+  </div>
+</div>
+
 <!-- About -->
 <div class="overlay" id="aboutOverlay">
   <div class="sheet">
@@ -524,8 +544,42 @@
     return allNodes().filter(function(n){ return n.parentIds && n.parentIds.indexOf(id) !== -1; });
   }
 
+  /* ---------------- Direct-line view (hide collateral relatives) ---------------- */
+  // By default only Me's direct line is drawn: every ancestor (via both
+  // parents at every level), plus Me, Me's spouse(s), and Me's descendants
+  // with their spouses. Everyone else (siblings of anyone in that line,
+  // and their families) is hidden behind a small arrow at the parents.
+  // Nothing is deleted — this only filters what computeLayout positions.
+  // forceVisibleIds holds people the user has explicitly revealed (via
+  // the arrow popup or search) this session; it's deliberately NOT saved,
+  // so every fresh load starts collapsed again.
+  var forceVisibleIds = {};
+
+  function computeDirectLine(){
+    var me = allNodes().filter(function(n){ return n.isMe; })[0];
+    if(!me) return null; // no "me" to anchor on: show everyone
+    var visible = {};
+    function walkUp(id){
+      if(visible[id] || !state.nodes[id]) return;
+      visible[id] = true;
+      (getNode(id).parentIds||[]).forEach(walkUp);
+    }
+    var down = {};
+    function walkDown(id){
+      if(down[id] || !state.nodes[id]) return;
+      down[id] = true;
+      visible[id] = true;
+      (getNode(id).spouseIds||[]).forEach(function(sid){ if(state.nodes[sid]) visible[sid] = true; });
+      childrenOf(id).forEach(function(c){ walkDown(c.id); });
+    }
+    walkUp(me.id);
+    walkDown(me.id);
+    Object.keys(forceVisibleIds).forEach(function(id){ if(state.nodes[id]) visible[id] = true; });
+    return visible;
+  }
+
   /* ---------------- Union-Find for spouse units ---------------- */
-  function computeUnits(){
+  function computeUnits(visibleSet){
     // Positioning units are at most a PAIR — not a full union-find over
     // every spouseIds edge. Union-find would transitively merge anyone
     // connected by any chain of remarriages into one block (e.g. Karen
@@ -536,12 +590,15 @@
     // spouse relationships still get a connector line (see spouseEdges
     // below) and still correctly pull shared children via their actual
     // parentIds — they just don't merge into the same slot-block.
-    var nodes = allNodes();
+    // visibleSet (optional): when given, only nodes present in it are
+    // included — used to build layout units from just the direct-line
+    // view (see computeDirectLine) without touching the global node set.
+    var nodes = visibleSet ? allNodes().filter(function(n){ return visibleSet[n.id]; }) : allNodes();
     var order = {}; nodes.forEach(function(n,i){ order[n.id]=i; });
     var matched = {};
     nodes.forEach(function(n){
       if(matched[n.id] !== undefined) return;
-      var partner = (n.spouseIds||[]).find(function(s){ return state.nodes[s] && matched[s]===undefined; });
+      var partner = (n.spouseIds||[]).find(function(s){ return state.nodes[s] && matched[s]===undefined && (!visibleSet || visibleSet[s]); });
       if(partner){ matched[n.id]=partner; matched[partner]=n.id; }
       else { matched[n.id]=null; }
     });
@@ -573,10 +630,21 @@
 
   /* ---------------- Layout (generation BFS + barycenter ordering) ---------------- */
   function computeLayout(){
-    var nodes = allNodes();
-    if(nodes.length===0) return { positions:{}, edges:[], spouseEdges:[], width:0, height:0 };
+    // visible: null = show everyone, else a map of ids in the direct-line
+    // view. Everything below that walks "all nodes" or "children of X"
+    // for POSITIONING goes through nodes/vChildrenOf so hidden people
+    // never enter units, layers, edges or the bounding box. The global
+    // allNodes()/childrenOf() stay unfiltered — hidden people remain
+    // fully editable, searchable and exportable.
+    var visible = computeDirectLine();
+    var nodes = visible ? allNodes().filter(function(n){ return visible[n.id]; }) : allNodes();
+    if(nodes.length===0) return { positions:{}, edges:[], spouseEdges:[], hiddenGroups:[], width:0, height:0 };
+    function vChildrenOf(id){
+      var c = childrenOf(id);
+      return visible ? c.filter(function(x){ return visible[x.id]; }) : c;
+    }
 
-    var uinfo = computeUnits();
+    var uinfo = computeUnits(visible);
     var units = uinfo.units, unitOfNode = uinfo.unitOfNode;
 
     // generation via BFS across parent/child/spouse edges
@@ -594,7 +662,7 @@
       (cn.spouseIds||[]).forEach(function(s){
         if(state.nodes[s] && !(s in gen)){ gen[s] = g; queue.push(s); }
       });
-      childrenOf(cur).forEach(function(ch){
+      vChildrenOf(cur).forEach(function(ch){
         if(!(ch.id in gen)){ gen[ch.id] = g+1; queue.push(ch.id); }
       });
     }
@@ -628,7 +696,7 @@
     function unitChildUnits(u){
       var set = {};
       u.members.forEach(function(mid){
-        childrenOf(mid).forEach(function(ch){ set[unitOfNode[ch.id]] = true; });
+        vChildrenOf(mid).forEach(function(ch){ set[unitOfNode[ch.id]] = true; });
       });
       return Object.keys(set);
     }
@@ -769,7 +837,7 @@
           // parents (top-of-branch ancestors) get positioned by
           // averaging their children instead.
           var bloodMembers = u.members.filter(function(mid){
-            return (getNode(mid).parentIds||[]).some(function(p){ return state.nodes[p]; });
+            return (getNode(mid).parentIds||[]).some(function(p){ return state.nodes[p] && unitOfNode[p]; });
           });
           if(bloodMembers.length){
             var downCandidates = [];
@@ -779,7 +847,7 @@
               // their unit's average — a blended-family parent (e.g. a
               // second husband who isn't paired with the other parent
               // in the same slot-block) still needs to pull correctly.
-              var parentIds = (getNode(mid).parentIds||[]).filter(function(p){ return state.nodes[p]; });
+              var parentIds = (getNode(mid).parentIds||[]).filter(function(p){ return state.nodes[p] && unitOfNode[p]; });
               if(!parentIds.length) return;
               var sum=0;
               parentIds.forEach(function(p){ sum += memberNodeCenterX(p); });
@@ -802,7 +870,7 @@
             // contributes a candidate based ONLY on their own children.
             var upCandidates = [];
             u.members.forEach(function(mid){
-              var kids = childrenOf(mid);
+              var kids = vChildrenOf(mid);
               if(!kids.length) return;
               var i = u.members.indexOf(mid), n = u.members.length;
               var sum=0;
@@ -858,7 +926,7 @@
     // parents. This also means a child never needs its parents to share
     // a unit to connect correctly.
     var edges = [];
-    allNodes().forEach(function(child){
+    nodes.forEach(function(child){
       var parentIds = (child.parentIds||[]).filter(function(p){ return state.nodes[p] && pixelPositions[p]; });
       if(!parentIds.length || !pixelPositions[child.id]) return;
       var sumX=0, sumY=0;
@@ -893,7 +961,7 @@
     // whoever's in between.
     var spouseEdges = [];
     var drawnPairs = {};
-    allNodes().forEach(function(n){
+    nodes.forEach(function(n){
       (n.spouseIds||[]).forEach(function(sid){
         if(!state.nodes[sid] || !pixelPositions[n.id] || !pixelPositions[sid]) return;
         var key = n.id < sid ? n.id+'|'+sid : sid+'|'+n.id;
@@ -919,7 +987,7 @@
           // itself, so it doesn't reintroduce that issue: the child
           // edge's own path still starts exactly at the row's bottom
           // edge, same as before.
-          var hasSharedChild = allNodes().some(function(c){
+          var hasSharedChild = nodes.some(function(c){
             var pids = c.parentIds||[];
             return pids.indexOf(aId)!==-1 && pids.indexOf(bId)!==-1;
           });
@@ -940,7 +1008,41 @@
       });
     });
 
-    return { positions: pixelPositions, edges: edges, spouseEdges: spouseEdges, width: width, height: height };
+    // Hidden groups: for each visible unit, the hidden people directly
+    // attached to it (children of any visible member, plus spouses of a
+    // visible member who aren't in the view, e.g. an ex-partner). One
+    // arrow per unit, anchored where that unit's children would branch
+    // from, so the badge sits in the inter-row gap below the couple.
+    var hiddenGroups = [];
+    if(visible){
+      units.forEach(function(u){
+        var ids = [], seen = {};
+        u.members.forEach(function(mid){
+          childrenOf(mid).forEach(function(c){
+            if(!visible[c.id] && !seen[c.id]){ seen[c.id]=true; ids.push(c.id); }
+          });
+          (getNode(mid).spouseIds||[]).forEach(function(sid){
+            if(state.nodes[sid] && !visible[sid] && !seen[sid]){ seen[sid]=true; ids.push(sid); }
+          });
+          // parents of a visible person who aren't in the view (e.g. a
+          // spouse's parents) — otherwise they'd have no arrow at all
+          (getNode(mid).parentIds||[]).forEach(function(pid){
+            if(state.nodes[pid] && !visible[pid] && !seen[pid]){ seen[pid]=true; ids.push(pid); }
+          });
+        });
+        if(!ids.length) return;
+        var sx = 0;
+        u.members.forEach(function(m){ sx += pixelPositions[m].x + NODE_W/2; });
+        hiddenGroups.push({
+          unitId: u.id,
+          hiddenIds: ids,
+          anchorX: sx / u.members.length,
+          anchorY: pixelPositions[u.members[0]].y + NODE_H
+        });
+      });
+    }
+
+    return { positions: pixelPositions, edges: edges, spouseEdges: spouseEdges, hiddenGroups: hiddenGroups, width: width, height: height };
   }
 
   /* ---------------- Rendering ---------------- */
@@ -1026,6 +1128,26 @@
         '<div class="dates">'+escapeHtml(dateLabel(n))+'</div>';
       el.addEventListener('click', function(){ openActionSheet(n.id); });
       world.appendChild(el);
+    });
+
+    // Arrow badges for hidden people (see computeLayout hiddenGroups).
+    // The short stub from the row bottom to the badge is drawn as a
+    // 'branch' so it reads as the start of the family's descent line.
+    (layout.hiddenGroups||[]).forEach(function(grp){
+      var badgeTop = grp.anchorY + 34;
+      var stub = document.createElementNS('http://www.w3.org/2000/svg','line');
+      stub.setAttribute('x1', grp.anchorX); stub.setAttribute('y1', grp.anchorY);
+      stub.setAttribute('x2', grp.anchorX); stub.setAttribute('y2', badgeTop);
+      stub.setAttribute('class','branch');
+      svg.appendChild(stub);
+      var badge = document.createElement('div');
+      badge.className = 'node hiddenbadge';
+      badge.style.left = (grp.anchorX - 18) + 'px';
+      badge.style.top = badgeTop + 'px';
+      badge.innerHTML = '<span class="chev">▾</span><span class="cnt">'+grp.hiddenIds.length+'</span>';
+      badge.title = grp.hiddenIds.length + ' hidden';
+      badge.addEventListener('click', function(ev){ ev.stopPropagation(); openHiddenGroup(grp.hiddenIds); });
+      world.appendChild(badge);
     });
 
     applyTransform();
@@ -1604,6 +1726,63 @@
   document.getElementById('gedcomReviewConfirm').addEventListener('click', finalizeGedcomImport);
   document.getElementById('gedcomMergeCancel').addEventListener('click', function(){ closeOverlay('gedcomMergeOverlay'); });
 
+  /* ---------------- Hidden people popup ---------------- */
+  var hiddenListIds = [];
+
+  function describeHidden(id, shown){
+    var n = getNode(id);
+    var kidsShown = childrenOf(id).filter(function(c){ return shown[c.id]; })
+      .map(function(c){ return c.name || 'Unnamed'; });
+    if(kidsShown.length) return 'Parent of ' + kidsShown.join(' & ');
+    var parents = (n.parentIds||[]).filter(function(p){ return state.nodes[p]; })
+      .map(function(p){ return getNode(p).name || 'Unnamed'; });
+    if(parents.length) return 'Child of ' + parents.join(' & ');
+    var partners = (n.spouseIds||[]).filter(function(sp){ return state.nodes[sp]; })
+      .map(function(sp){ return getNode(sp).name || 'Unnamed'; });
+    return partners.length ? 'Partner of ' + partners.join(' & ') : '';
+  }
+
+  // Reveal people into the main tree for this session. Their spouses come
+  // along so a revealed sibling appears with their partner, not alone.
+  function revealPeople(ids){
+    ids.forEach(function(id){
+      if(!state.nodes[id]) return;
+      forceVisibleIds[id] = true;
+      (getNode(id).spouseIds||[]).forEach(function(sid){ if(state.nodes[sid]) forceVisibleIds[sid] = true; });
+    });
+    render();
+  }
+
+  function openHiddenGroup(ids){
+    hiddenListIds = ids.slice();
+    var list = document.getElementById('hiddenList');
+    list.innerHTML = '';
+    var shown = computeLayout().positions;
+    ids.forEach(function(id){
+      var n = getNode(id);
+      if(!n) return;
+      var yr = n.birth ? ' ('+n.birth.split('-')[0]+')' : '';
+      var sub = describeHidden(id, shown);
+      var it = document.createElement('div');
+      it.className = 'actionitem';
+      it.innerHTML = '<span class="emoji">'+(n.sex==='F'?'🟥':n.sex==='M'?'🟦':'⬜')+'</span>'+
+        '<span>'+escapeHtml((n.name||'Unnamed')+yr)+
+        (sub ? '<br><span style="font-size:12px; font-weight:400; color:#8a8272;">'+escapeHtml(sub)+'</span>' : '')+'</span>';
+      it.addEventListener('click', function(){
+        closeOverlay('hiddenOverlay');
+        revealPeople([id]);
+        focusNode(id);
+      });
+      list.appendChild(it);
+    });
+    showOverlay('hiddenOverlay');
+  }
+  document.getElementById('hiddenClose').addEventListener('click', function(){ closeOverlay('hiddenOverlay'); });
+  document.getElementById('hiddenShowAll').addEventListener('click', function(){
+    closeOverlay('hiddenOverlay');
+    revealPeople(hiddenListIds);
+  });
+
   /* ---------------- Form (add/edit) ---------------- */
   var formCtx = null;
   var pendingPhoto = null;
@@ -1686,6 +1865,9 @@
 
     var newNode = { id: uid(), name:name, sex:sex, photo:pendingPhoto, birth:birth, death:death, parentIds:[], spouseIds:[] };
     state.nodes[newNode.id] = newNode;
+    // someone just added by hand must stay on screen, even if they'd
+    // otherwise be collateral (e.g. a new child of an ancestor)
+    forceVisibleIds[newNode.id] = true;
 
     if(formCtx.mode === 'addParent'){
       var child = getNode(formCtx.forId);
@@ -1769,6 +1951,8 @@
         it.innerHTML = '<span class="emoji">👤</span><span>'+escapeHtml(n.name||'Unnamed')+'</span>';
         it.addEventListener('click', function(){
           closeOverlay('searchOverlay');
+          // a hidden person has no position yet — reveal them first
+          if(!computeLayout().positions[n.id]) revealPeople([n.id]);
           focusNode(n.id);
         });
         results.appendChild(it);
