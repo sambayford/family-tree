@@ -1008,11 +1008,14 @@
       });
     });
 
-    // Hidden groups: for each visible unit, the hidden people directly
-    // attached to it (children of any visible member, plus spouses of a
-    // visible member who aren't in the view, e.g. an ex-partner). One
-    // arrow per unit, anchored where that unit's children would branch
-    // from, so the badge sits in the inter-row gap below the couple.
+    // Hidden groups. Two kinds, each with its own arrow:
+    //  - 'down': hidden people below a visible unit — children of any
+    //    visible member, plus spouses of a visible member who aren't in
+    //    the view (e.g. an ex-partner). Badge sits in the gap under the
+    //    couple, where their children would branch from.
+    //  - 'up': hidden PARENTS of a visible person (e.g. a spouse's
+    //    parents). Badge sits in the gap ABOVE that one person's card —
+    //    parents belong above — not centred on the couple.
     var hiddenGroups = [];
     if(visible){
       units.forEach(function(u){
@@ -1024,17 +1027,26 @@
           (getNode(mid).spouseIds||[]).forEach(function(sid){
             if(state.nodes[sid] && !visible[sid] && !seen[sid]){ seen[sid]=true; ids.push(sid); }
           });
-          // parents of a visible person who aren't in the view (e.g. a
-          // spouse's parents) — otherwise they'd have no arrow at all
+          var pids = [];
           (getNode(mid).parentIds||[]).forEach(function(pid){
-            if(state.nodes[pid] && !visible[pid] && !seen[pid]){ seen[pid]=true; ids.push(pid); }
+            if(state.nodes[pid] && !visible[pid]) pids.push(pid);
           });
+          if(pids.length){
+            hiddenGroups.push({
+              unitId: u.id,
+              dir: 'up',
+              hiddenIds: pids,
+              anchorX: pixelPositions[mid].x + NODE_W/2,
+              anchorY: pixelPositions[mid].y
+            });
+          }
         });
         if(!ids.length) return;
         var sx = 0;
         u.members.forEach(function(m){ sx += pixelPositions[m].x + NODE_W/2; });
         hiddenGroups.push({
           unitId: u.id,
+          dir: 'down',
           hiddenIds: ids,
           anchorX: sx / u.members.length,
           anchorY: pixelPositions[u.members[0]].y + NODE_H
@@ -1134,17 +1146,21 @@
     // The short stub from the row bottom to the badge is drawn as a
     // 'branch' so it reads as the start of the family's descent line.
     (layout.hiddenGroups||[]).forEach(function(grp){
-      var badgeTop = grp.anchorY + 34;
+      var up = grp.dir === 'up';
+      // badge is 36px; sits 34px clear of the card edge, on the side its
+      // people belong to (parents above, children/partners below)
+      var badgeTop = up ? grp.anchorY - 34 - 36 : grp.anchorY + 34;
+      var stubFar = up ? badgeTop + 36 : badgeTop;
       var stub = document.createElementNS('http://www.w3.org/2000/svg','line');
       stub.setAttribute('x1', grp.anchorX); stub.setAttribute('y1', grp.anchorY);
-      stub.setAttribute('x2', grp.anchorX); stub.setAttribute('y2', badgeTop);
+      stub.setAttribute('x2', grp.anchorX); stub.setAttribute('y2', stubFar);
       stub.setAttribute('class','branch');
       svg.appendChild(stub);
       var badge = document.createElement('div');
       badge.className = 'node hiddenbadge';
       badge.style.left = (grp.anchorX - 18) + 'px';
       badge.style.top = badgeTop + 'px';
-      badge.innerHTML = '<span class="chev">▾</span><span class="cnt">'+grp.hiddenIds.length+'</span>';
+      badge.innerHTML = '<span class="chev">'+(up?'▴':'▾')+'</span><span class="cnt">'+grp.hiddenIds.length+'</span>';
       badge.title = grp.hiddenIds.length + ' hidden';
       badge.addEventListener('click', function(ev){ ev.stopPropagation(); openHiddenGroup(grp.hiddenIds); });
       world.appendChild(badge);
@@ -1234,6 +1250,11 @@
       var p = layout.positions[id];
       minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
       maxX = Math.max(maxX, p.x+NODE_W); maxY = Math.max(maxY, p.y+NODE_H);
+    });
+    // arrow badges can sit past the outermost rows (70px: 34 gap + 36 badge)
+    (layout.hiddenGroups||[]).forEach(function(g){
+      if(g.dir==='up') minY = Math.min(minY, g.anchorY - 70);
+      else maxY = Math.max(maxY, g.anchorY + 70);
     });
     var treeW = maxX-minX, treeH = maxY-minY;
     var vw = viewport.clientWidth, vh = viewport.clientHeight;
