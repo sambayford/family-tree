@@ -749,7 +749,19 @@
     var unitsById = {};
     units.forEach(function(u){ unitsById[u.id] = u; });
     var unitWidth = {};
-    units.forEach(function(u){ unitWidth[u.id] = u.members.length * SLOT_W; });
+    // A unit with a hidden partner gets an arrow beside its card, so it
+    // reserves SIDE_PAD extra room on BOTH sides (symmetric, so card
+    // centres and every alignment formula based on centerX are
+    // unchanged — only the minimum spacing to neighbours grows).
+    var SIDE_PAD = 30;
+    var unitPad = {};
+    units.forEach(function(u){
+      var hasHiddenPartner = !!visible && u.members.some(function(m){
+        return (getNode(m).spouseIds||[]).some(function(sid){ return state.nodes[sid] && !visible[sid]; });
+      });
+      unitPad[u.id] = hasHiddenPartner ? SIDE_PAD : 0;
+      unitWidth[u.id] = u.members.length * SLOT_W + 2*unitPad[u.id];
+    });
 
     var centerX = {};
     Object.keys(layers).forEach(function(g){
@@ -900,7 +912,7 @@
       var uId = unitOfNode[nid];
       var u = unitsById[uId];
       var idxInUnit = u.members.indexOf(nid);
-      var leftEdge = centerX[uId] - unitWidth[uId]/2;
+      var leftEdge = centerX[uId] - unitWidth[uId]/2 + unitPad[uId];
       pixelPositions[nid] = {
         x: leftEdge + idxInUnit*SLOT_W,
         y: (unitGen[uId] - minGenActual) * ROW_H
@@ -1009,10 +1021,10 @@
     });
 
     // Hidden groups. Two kinds, each with its own arrow:
-    //  - 'down': hidden people below a visible unit — children of any
-    //    visible member, plus spouses of a visible member who aren't in
-    //    the view (e.g. an ex-partner). Badge sits in the gap under the
-    //    couple, where their children would branch from.
+    //  - 'down': hidden CHILDREN of any visible member. Badge sits in the
+    //    gap under the couple, where their children would branch from.
+    //  - 'side': hidden PARTNERS of a visible person (e.g. an ex).
+    //    Badge sits beside that person's card, on the outer side.
     //  - 'up': hidden PARENTS of a visible person (e.g. a spouse's
     //    parents). Badge sits in the gap ABOVE that one person's card —
     //    parents belong above — not centred on the couple.
@@ -1024,9 +1036,24 @@
           childrenOf(mid).forEach(function(c){
             if(!visible[c.id] && !seen[c.id]){ seen[c.id]=true; ids.push(c.id); }
           });
+          // hidden partners: arrow BESIDE this person's card, on the outer
+          // side (away from their visible partner in the same unit)
+          var sids = [];
           (getNode(mid).spouseIds||[]).forEach(function(sid){
-            if(state.nodes[sid] && !visible[sid] && !seen[sid]){ seen[sid]=true; ids.push(sid); }
+            if(state.nodes[sid] && !visible[sid]) sids.push(sid);
           });
+          if(sids.length){
+            var idx = u.members.indexOf(mid);
+            var left = u.members.length > 1 && idx === 0;
+            hiddenGroups.push({
+              unitId: u.id,
+              dir: 'side',
+              side: left ? 'left' : 'right',
+              hiddenIds: sids,
+              anchorX: pixelPositions[mid].x + (left ? 0 : NODE_W),
+              anchorY: pixelPositions[mid].y + NODE_H/2
+            });
+          }
           var pids = [];
           (getNode(mid).parentIds||[]).forEach(function(pid){
             if(state.nodes[pid] && !visible[pid]) pids.push(pid);
@@ -1146,21 +1173,33 @@
     // The short stub from the row bottom to the badge is drawn as a
     // 'branch' so it reads as the start of the family's descent line.
     (layout.hiddenGroups||[]).forEach(function(grp){
-      var up = grp.dir === 'up';
-      // badge is 36px; sits 34px clear of the card edge, on the side its
-      // people belong to (parents above, children/partners below)
-      var badgeTop = up ? grp.anchorY - 34 - 36 : grp.anchorY + 34;
-      var stubFar = up ? badgeTop + 36 : badgeTop;
+      var up = grp.dir === 'up', side = grp.dir === 'side';
+      var badgeLeft, badgeTop, x2, y2, chev;
+      if(side){
+        // beside the card, vertically centred: partners belong alongside
+        var right = grp.side === 'right';
+        badgeLeft = right ? grp.anchorX + 14 : grp.anchorX - 14 - 36;
+        badgeTop = grp.anchorY - 18;
+        x2 = right ? badgeLeft : badgeLeft + 36; y2 = grp.anchorY;
+        chev = right ? '▸' : '◂';
+      } else {
+        // badge is 36px; sits 34px clear of the card edge, on the side
+        // its people belong to (parents above, children below)
+        badgeLeft = grp.anchorX - 18;
+        badgeTop = up ? grp.anchorY - 34 - 36 : grp.anchorY + 34;
+        x2 = grp.anchorX; y2 = up ? badgeTop + 36 : badgeTop;
+        chev = up ? '▴' : '▾';
+      }
       var stub = document.createElementNS('http://www.w3.org/2000/svg','line');
       stub.setAttribute('x1', grp.anchorX); stub.setAttribute('y1', grp.anchorY);
-      stub.setAttribute('x2', grp.anchorX); stub.setAttribute('y2', stubFar);
+      stub.setAttribute('x2', x2); stub.setAttribute('y2', y2);
       stub.setAttribute('class','branch');
       svg.appendChild(stub);
       var badge = document.createElement('div');
       badge.className = 'node hiddenbadge';
-      badge.style.left = (grp.anchorX - 18) + 'px';
+      badge.style.left = badgeLeft + 'px';
       badge.style.top = badgeTop + 'px';
-      badge.innerHTML = '<span class="chev">'+(up?'▴':'▾')+'</span><span class="cnt">'+grp.hiddenIds.length+'</span>';
+      badge.innerHTML = '<span class="chev">'+chev+'</span><span class="cnt">'+grp.hiddenIds.length+'</span>';
       badge.title = grp.hiddenIds.length + ' hidden';
       badge.addEventListener('click', function(ev){ ev.stopPropagation(); openHiddenGroup(grp.hiddenIds); });
       world.appendChild(badge);
