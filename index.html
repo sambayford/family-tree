@@ -544,12 +544,13 @@
     return allNodes().filter(function(n){ return n.parentIds && n.parentIds.indexOf(id) !== -1; });
   }
 
-  /* ---------------- Direct-line view (hide collateral relatives) ---------------- */
-  // By default only Me's direct line is drawn: every ancestor (via both
-  // parents at every level), plus Me, Me's spouse(s), and Me's descendants
-  // with their spouses. Everyone else (siblings of anyone in that line,
-  // and their families) is hidden behind a small arrow at the parents.
-  // Nothing is deleted — this only filters what computeLayout positions.
+  /* ---------------- Direct-line view (hide ancestors + collateral relatives) ---------------- */
+  // By default only Me and Me's descendants (with their spouses) are
+  // drawn. Ancestors are hidden too, behind an arrow above each person
+  // whose parents aren't shown, so the tree opens one generation at a
+  // time (see tryRevealAncestors). Siblings, ex-partners and in-laws are
+  // hidden behind their own arrows. Nothing is deleted — this only
+  // filters what computeLayout positions.
   // forceVisibleIds holds people the user has explicitly revealed (via
   // the arrow popup or search) this session; it's deliberately NOT saved,
   // so every fresh load starts collapsed again.
@@ -559,11 +560,6 @@
     var me = allNodes().filter(function(n){ return n.isMe; })[0];
     if(!me) return null; // no "me" to anchor on: show everyone
     var visible = {};
-    function walkUp(id){
-      if(visible[id] || !state.nodes[id]) return;
-      visible[id] = true;
-      (getNode(id).parentIds||[]).forEach(walkUp);
-    }
     var down = {};
     function walkDown(id){
       if(down[id] || !state.nodes[id]) return;
@@ -572,10 +568,25 @@
       (getNode(id).spouseIds||[]).forEach(function(sid){ if(state.nodes[sid]) visible[sid] = true; });
       childrenOf(id).forEach(function(c){ walkDown(c.id); });
     }
-    walkUp(me.id);
     walkDown(me.id);
     Object.keys(forceVisibleIds).forEach(function(id){ if(state.nodes[id]) visible[id] = true; });
     return visible;
+  }
+
+  // Number of parent→child connector pairs whose left-to-right order
+  // flips between the parent end and the child end (same pair of rows).
+  // Those are the lines that cross, or run over each other's bus.
+  function countCrossings(layout){
+    var groups = {};
+    layout.edges.forEach(function(e){ var k = e.y1+'|'+e.y2; (groups[k] = groups[k]||[]).push(e); });
+    var n = 0;
+    Object.keys(groups).forEach(function(k){
+      var g = groups[k];
+      for(var i=0;i<g.length;i++) for(var j=i+1;j<g.length;j++){
+        if((g[i].x1-g[j].x1)*(g[i].x2-g[j].x2) < -1e-6) n++;
+      }
+    });
+    return n;
   }
 
   /* ---------------- Union-Find for spouse units ---------------- */
@@ -755,9 +766,16 @@
     // unchanged — only the minimum spacing to neighbours grows).
     var SIDE_PAD = 30;
     var unitPad = {};
+    // hidden people who are a parent of someone shown get their arrow
+    // above that person; they must not ALSO get a partner arrow beside
+    // their visible partner
+    var upIds = {};
+    if(visible) nodes.forEach(function(n){
+      (n.parentIds||[]).forEach(function(pid){ if(state.nodes[pid] && !visible[pid]) upIds[pid] = true; });
+    });
     units.forEach(function(u){
       var hasHiddenPartner = !!visible && u.members.some(function(m){
-        return (getNode(m).spouseIds||[]).some(function(sid){ return state.nodes[sid] && !visible[sid]; });
+        return (getNode(m).spouseIds||[]).some(function(sid){ return state.nodes[sid] && !visible[sid] && !upIds[sid]; });
       });
       unitPad[u.id] = hasHiddenPartner ? SIDE_PAD : 0;
       unitWidth[u.id] = u.members.length * SLOT_W + 2*unitPad[u.id];
@@ -1040,7 +1058,7 @@
           // side (away from their visible partner in the same unit)
           var sids = [];
           (getNode(mid).spouseIds||[]).forEach(function(sid){
-            if(state.nodes[sid] && !visible[sid]) sids.push(sid);
+            if(state.nodes[sid] && !visible[sid] && !upIds[sid]) sids.push(sid);
           });
           if(sids.length){
             var idx = u.members.indexOf(mid);
@@ -1201,7 +1219,7 @@
       badge.style.top = badgeTop + 'px';
       badge.innerHTML = '<span class="chev">'+chev+'</span><span class="cnt">'+grp.hiddenIds.length+'</span>';
       badge.title = grp.hiddenIds.length + ' hidden';
-      badge.addEventListener('click', function(ev){ ev.stopPropagation(); openHiddenGroup(grp.hiddenIds); });
+      badge.addEventListener('click', function(ev){ ev.stopPropagation(); openHiddenGroup(grp.hiddenIds, grp.dir); });
       world.appendChild(badge);
     });
 
@@ -1813,8 +1831,34 @@
     render();
   }
 
-  function openHiddenGroup(ids){
+  // Open up a generation of ancestors, one person at a time. A person
+  // whose arrival would introduce crossing relationship lines is left
+  // hidden (their arrow stays) rather than drawing a tangle. Spouses do
+  // NOT tag along here: an ancestor's other partner isn't an ancestor.
+  // Returns the ids that were blocked.
+  function tryRevealAncestors(ids){
+    var base = countCrossings(computeLayout());
+    var blocked = [];
+    ids.forEach(function(id){
+      if(!state.nodes[id] || forceVisibleIds[id]) return;
+      forceVisibleIds[id] = true;
+      var now = countCrossings(computeLayout());
+      if(now > base){ delete forceVisibleIds[id]; blocked.push(id); }
+      else base = now;
+    });
+    render();
+    return blocked;
+  }
+
+  function blockedToast(blocked){
+    var names = blocked.map(function(id){ return getNode(id).name || 'Unnamed'; }).join(', ');
+    showToast(names + ' left hidden — would cross lines');
+  }
+
+  var hiddenListDir = 'down';
+  function openHiddenGroup(ids, dir){
     hiddenListIds = ids.slice();
+    hiddenListDir = dir || 'down';
     var list = document.getElementById('hiddenList');
     list.innerHTML = '';
     var shown = computeLayout().positions;
@@ -1829,8 +1873,13 @@
         '<span>'+escapeHtml((n.name||'Unnamed')+yr)+
         (sub ? '<br><span style="font-size:12px; font-weight:400; color:#8a8272;">'+escapeHtml(sub)+'</span>' : '')+'</span>';
       it.addEventListener('click', function(){
+        if(hiddenListDir === 'up'){
+          var blocked = tryRevealAncestors([id]);
+          if(blocked.length){ blockedToast(blocked); return; }
+        } else {
+          revealPeople([id]);
+        }
         closeOverlay('hiddenOverlay');
-        revealPeople([id]);
         focusNode(id);
       });
       list.appendChild(it);
@@ -1839,8 +1888,14 @@
   }
   document.getElementById('hiddenClose').addEventListener('click', function(){ closeOverlay('hiddenOverlay'); });
   document.getElementById('hiddenShowAll').addEventListener('click', function(){
+    if(hiddenListDir === 'up'){
+      var blocked = tryRevealAncestors(hiddenListIds);
+      if(blocked.length) blockedToast(blocked);
+      if(blocked.length === hiddenListIds.length) return; // nothing opened: keep popup
+    } else {
+      revealPeople(hiddenListIds);
+    }
     closeOverlay('hiddenOverlay');
-    revealPeople(hiddenListIds);
   });
 
   /* ---------------- Form (add/edit) ---------------- */
